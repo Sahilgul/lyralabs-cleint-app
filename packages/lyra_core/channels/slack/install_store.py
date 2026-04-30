@@ -1,19 +1,26 @@
-"""Postgres-backed Slack InstallationStore.
+"""Postgres-backed Slack AsyncInstallationStore.
 
-slack_bolt expects an InstallationStore for OAuth flow persistence. We
-implement it on top of our SlackInstallation table so installations are
-durable and tied to tenants.
+slack_bolt's AsyncOAuthSettings calls the `async_*` methods on the configured
+installation_store. Earlier this file implemented the *sync* InstallationStore
+interface and tried to bridge to async with `asyncio.run()`, which:
 
-Bot tokens are encrypted at rest with the tenant's Fernet key.
+  1. Crashes inside an already-running event loop (which uvicorn always is), and
+  2. Doesn't even get called — slack_bolt's async flow looks up `async_save`,
+     not `save`, so the sync interface was dead code.
+
+We now extend AsyncInstallationStore directly. Bot/refresh tokens are
+encrypted at rest with the tenant's Fernet key.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from logging import Logger
-from typing import Any
 
-from slack_sdk.oauth.installation_store import Bot, Installation, InstallationStore
+from slack_sdk.oauth.installation_store import Bot, Installation
+from slack_sdk.oauth.installation_store.async_installation_store import (
+    AsyncInstallationStore,
+)
 from sqlalchemy import select
 
 from ...common.crypto import decrypt_for_tenant, encrypt_for_tenant
@@ -24,17 +31,17 @@ from ...db.session import async_session
 log = get_logger(__name__)
 
 
-class PostgresInstallationStore(InstallationStore):
-    """Sync API surface required by slack_bolt; we run async work via asyncio.run for installs.
-
-    Note: slack_bolt's sync installation store interface is invoked from request
-    threads by `AsyncSlackRequestHandler`. We use a thread-safe sync session
-    pattern by spawning a fresh asyncio loop call. For high-volume installs,
-    swap to AsyncInstallationStore.
-    """
+class PostgresInstallationStore(AsyncInstallationStore):
+    """Async InstallationStore backed by Postgres + tenant-scoped Fernet encryption."""
 
     def __init__(self, logger: Logger | None = None) -> None:
         self._logger = logger
+
+    @property
+    def logger(self) -> Logger:
+        # AsyncInstallationStore exposes `logger` on the base; some Bolt
+        # versions read it during error paths.
+        return self._logger or log  # type: ignore[return-value]
 
     @staticmethod
     async def _ensure_tenant(team_id: str, team_name: str | None) -> str:
@@ -58,7 +65,21 @@ class PostgresInstallationStore(InstallationStore):
                 log.info("tenant.created", tenant_id=row.id, team_id=team_id)
             return row.id
 
-    async def _async_save(self, installation: Installation) -> None:
+    async def _async_find(
+        self, *, team_id: str | None, enterprise_id: str | None
+    ) -> tuple[SlackInstallation | None, str | None]:
+        async with async_session() as s:
+            stmt = select(SlackInstallation).order_by(SlackInstallation.installed_at.desc())
+            if team_id:
+                stmt = stmt.where(SlackInstallation.team_id == team_id)
+            if enterprise_id:
+                stmt = stmt.where(SlackInstallation.enterprise_id == enterprise_id)
+            row = (await s.execute(stmt.limit(1))).scalar_one_or_none()
+            return row, row.tenant_id if row else None
+
+    # --- AsyncInstallationStore interface -------------------------------------
+
+    async def async_save(self, installation: Installation) -> None:
         team_id = installation.team_id or installation.enterprise_id
         if not team_id:
             raise ValueError("Slack installation missing team_id and enterprise_id")
@@ -107,37 +128,20 @@ class PostgresInstallationStore(InstallationStore):
             await s.commit()
             log.info("slack.install.saved", team_id=team_id, tenant_id=tenant_id)
 
-    async def _async_find(
-        self, *, team_id: str | None, enterprise_id: str | None
-    ) -> tuple[SlackInstallation | None, str | None]:
-        async with async_session() as s:
-            stmt = select(SlackInstallation).order_by(SlackInstallation.installed_at.desc())
-            if team_id:
-                stmt = stmt.where(SlackInstallation.team_id == team_id)
-            if enterprise_id:
-                stmt = stmt.where(SlackInstallation.enterprise_id == enterprise_id)
-            row = (await s.execute(stmt.limit(1))).scalar_one_or_none()
-            return row, row.tenant_id if row else None
+    async def async_save_bot(self, bot: Bot) -> None:
+        # Bolt always calls async_save with the full Installation before
+        # async_save_bot, so the row is already persisted. No-op here avoids
+        # writing duplicate rows that would split bot+install state.
+        return None
 
-    # --- slack_bolt sync interface ------------------------------------------
-
-    def save(self, installation: Installation) -> None:
-        import asyncio
-
-        asyncio.run(self._async_save(installation))
-
-    def find_bot(
+    async def async_find_bot(
         self,
         *,
         enterprise_id: str | None,
         team_id: str | None,
         is_enterprise_install: bool | None = False,
     ) -> Bot | None:
-        import asyncio
-
-        row, tenant_id = asyncio.run(
-            self._async_find(team_id=team_id, enterprise_id=enterprise_id)
-        )
+        row, tenant_id = await self._async_find(team_id=team_id, enterprise_id=enterprise_id)
         if row is None or tenant_id is None or row.bot_token_encrypted is None:
             return None
         return Bot(
@@ -161,7 +165,7 @@ class PostgresInstallationStore(InstallationStore):
             installed_at=row.installed_at.timestamp() if row.installed_at else None,
         )
 
-    def find_installation(
+    async def async_find_installation(
         self,
         *,
         enterprise_id: str | None,
@@ -169,7 +173,7 @@ class PostgresInstallationStore(InstallationStore):
         user_id: str | None = None,
         is_enterprise_install: bool | None = False,
     ) -> Installation | None:
-        bot = self.find_bot(
+        bot = await self.async_find_bot(
             enterprise_id=enterprise_id,
             team_id=team_id,
             is_enterprise_install=is_enterprise_install,
@@ -189,18 +193,22 @@ class PostgresInstallationStore(InstallationStore):
             installed_at=bot.installed_at,
         )
 
-    def delete_bot(
-        self, *, enterprise_id: str | None, team_id: str | None
-    ) -> None:  # pragma: no cover - rarely used
-        # Soft delete: leave history, mark token blank. Implement when needed.
-        pass
-
-    def delete_installation(
-        self, *, enterprise_id: str | None, team_id: str | None, user_id: str | None = None
-    ) -> None:  # pragma: no cover
-        pass
-
-    def delete_all(
+    async def async_delete_bot(
         self, *, enterprise_id: str | None, team_id: str | None
     ) -> None:  # pragma: no cover
-        pass
+        # Soft-delete on uninstall is handled in adapter._disable_workspace.
+        return None
+
+    async def async_delete_installation(
+        self,
+        *,
+        enterprise_id: str | None,
+        team_id: str | None,
+        user_id: str | None = None,
+    ) -> None:  # pragma: no cover
+        return None
+
+    async def async_delete_all(
+        self, *, enterprise_id: str | None, team_id: str | None
+    ) -> None:  # pragma: no cover
+        return None

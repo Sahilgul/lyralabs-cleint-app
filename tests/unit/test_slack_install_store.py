@@ -1,9 +1,8 @@
 """lyra_core.channels.slack.install_store.PostgresInstallationStore.
 
-We mock the async_session context manager and exercise the async helpers
-directly. The sync slack_bolt interface (`save`, `find_bot`,
-`find_installation`) just wraps the async methods via `asyncio.run`, which we
-do not exercise here to avoid nested event loops in pytest-asyncio.
+We mock the async_session context manager and exercise the AsyncInstallationStore
+methods directly. slack_bolt's async OAuth flow calls `async_save` /
+`async_find_bot` / `async_find_installation` — those are what we cover here.
 """
 
 from __future__ import annotations
@@ -110,7 +109,7 @@ async def test_ensure_tenant_returns_existing_id(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_async_save_encrypts_tokens(monkeypatch) -> None:
-    """`_async_save` should encrypt bot + refresh tokens before persisting."""
+    """`async_save` should encrypt bot + refresh tokens before persisting."""
     from lyra_core.channels.slack import install_store as mod
 
     inserted: list[SlackInstallation] = []
@@ -139,7 +138,7 @@ async def test_async_save_encrypts_tokens(monkeypatch) -> None:
     )
 
     store = PostgresInstallationStore()
-    await store._async_save(_installation())
+    await store.async_save(_installation())
 
     assert len(inserted) == 1
     row = inserted[0]
@@ -172,7 +171,7 @@ async def test_async_save_raises_without_team_id() -> None:
         bot_token="x",
     )
     with pytest.raises(ValueError, match="team_id"):
-        await store._async_save(bad)
+        await store.async_save(bad)
 
 
 @pytest.mark.asyncio
