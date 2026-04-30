@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Env / secrets — NEVER bake into images
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Git / GitHub
+.git/
+.github/
+
+# Tests, docs, infra (not needed at runtime)
+tests/
+docs/
+infra/
+*.md
+!README.md
+scripts/

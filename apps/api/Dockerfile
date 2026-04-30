@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,5 +23,7 @@ COPY alembic.ini /app/alembic.ini
 
 ENV PYTHONPATH=/app:/app/packages
 
-EXPOSE 8000
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Cloud Run injects $PORT (defaults to 8080). Locally we run on 8000.
+# Shell form lets us read $PORT; `exec` makes uvicorn PID 1 so SIGTERM is handled.
+EXPOSE 8080
+CMD exec uvicorn apps.api.main:app --host 0.0.0.0 --port ${PORT:-8080}
