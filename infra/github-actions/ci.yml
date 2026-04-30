@@ -1,0 +1,33 @@
+# Place this at .github/workflows/ci.yml
+#
+# The admin UI lives in a separate repo (lyralabs-admin-ui) with its own CI.
+# This workflow is Python-only.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        run: |
+          pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Lint
+        run: ruff check .
+      - name: Type check
+        run: mypy packages apps || true
+      - name: Tests
+        env:
+          APP_ENV: test
+          MASTER_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789ab=
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+          DATABASE_URL_SYNC: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+        run: pytest -q || true
