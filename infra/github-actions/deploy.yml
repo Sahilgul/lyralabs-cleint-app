@@ -4,7 +4,7 @@
 #   - Artifact Registry repo `lyralabs` in REGION
 #   - Secret Manager secret `lyralabs-env`
 #
-# The Vite admin UI is bundled into the api image (see apps/api/Dockerfile),
+# The Vite admin UI is bundled into the api image (see ./Dockerfile),
 # so we only deploy two Cloud Run services: api and worker.
 name: deploy
 
@@ -29,7 +29,7 @@ jobs:
     strategy:
       matrix:
         service:
-          - { name: api, dockerfile: apps/api/Dockerfile, port: 8000 }
+          - { name: api, dockerfile: Dockerfile, port: 8000 }
           - { name: worker, dockerfile: apps/worker/Dockerfile, port: 0 }
     steps:
       - uses: actions/checkout@v4

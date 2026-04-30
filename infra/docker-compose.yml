@@ -41,7 +41,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: apps/api/Dockerfile
+      dockerfile: Dockerfile
     container_name: lyralabs-api
     env_file: ../.env
     ports:

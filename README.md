@@ -487,7 +487,7 @@ Two Cloud Run services from this repo (driven by `infra/cloud-run/*.yaml` and th
 
 | Service          | Repo                | Image source                          | Notes                                                                |
 | ---------------- | ------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| `api`            | this repo           | `apps/api/Dockerfile`                 | Min instances ≥ 1 to keep Slack response times under 3s.             |
+| `api`            | this repo           | `./Dockerfile` (repo root)            | Min instances ≥ 1 to keep Slack response times under 3s.             |
 | `worker`         | this repo           | `apps/worker/Dockerfile`              | Concurrency 4–8; CPU always-on for long agent runs.                  |
 | `admin-ui`       | `lyralabs-admin-ui` | `Dockerfile` (Node build → Nginx)     | Static SPA, scale-to-zero. Origin must be in `ADMIN_BASE_URL` here.  |
 
