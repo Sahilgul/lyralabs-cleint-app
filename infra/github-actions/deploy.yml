@@ -30,7 +30,7 @@ jobs:
       matrix:
         service:
           - { name: api, dockerfile: Dockerfile, port: 8000 }
-          - { name: worker, dockerfile: apps/worker/Dockerfile, port: 0 }
+          - { name: worker, dockerfile: Dockerfile, port: 0 }
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2

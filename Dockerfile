@@ -1,3 +1,9 @@
+# Single image for both Lyralabs services. Same code, different runtime command:
+#   - lyralabs-api    -> default CMD (uvicorn FastAPI on $PORT)
+#   - lyralabs-worker -> override CMD to: celery -A apps.worker.celery_app:celery worker
+#
+# Cloud Run sets the command via "Container command" / "Container arguments"
+# fields in the wizard. docker-compose sets it via the `command:` key.
 FROM python:3.14-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -14,12 +20,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install -e .
-
+# Copy ALL install inputs before running pip:
+#   - pyproject.toml: declares deps + hatchling build config
+#   - README.md:      hatchling validates the `readme = "README.md"` field
+#   - packages/, apps/: editable install (`pip install -e .`) needs the actual
+#                       package directories listed in [tool.hatch.build.targets.wheel]
+#   - alembic.ini:    used by migrations at runtime, ride along here for simplicity
+#
+# Trade-off: any code change re-runs `pip install` (~2-3 min in Cloud Build vs
+# ~5s with a deps-only layer cache). Optimize later by generating a
+# requirements.txt and splitting deps from project install.
+COPY pyproject.toml README.md alembic.ini ./
 COPY packages /app/packages
 COPY apps /app/apps
-COPY alembic.ini /app/alembic.ini
+
+RUN pip install --upgrade pip && pip install -e .
 
 ENV PYTHONPATH=/app:/app/packages
 

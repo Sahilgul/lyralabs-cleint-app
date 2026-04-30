@@ -59,7 +59,7 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: apps/worker/Dockerfile
+      dockerfile: Dockerfile
     container_name: lyralabs-worker
     env_file: ../.env
     depends_on:
