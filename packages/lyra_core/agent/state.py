@@ -59,8 +59,16 @@ class AgentState(TypedDict, total=False):
     reply_thread_ts: str | None
 
     # --- working state ---
+    # `classification` is legacy-mode only (set by classifier_node).
     classification: Literal["smalltalk", "task", "clarification"]
+    # `plan` holds the approved/in-flight plan that the executor walks.
+    # Legacy mode: planner_node sets it directly. Unified mode: agent_node
+    # sets it via the submit_plan_for_approval meta-tool, then approval_node
+    # gates it before executor_node runs it.
     plan: dict[str, Any] | None  # serialized Plan
+    # Unified mode: the plan the agent wants to run, awaiting approval.
+    # approval_node copies pending_plan -> plan after a successful approve.
+    pending_plan: dict[str, Any] | None
     step_results: list[dict[str, Any]]
     approval_decision: Literal["approved", "rejected", "pending"] | None
     final_summary: str | None

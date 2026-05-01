@@ -8,7 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, HttpUrl, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     # Admin
     admin_jwt_secret: str = ""
     admin_jwt_issuer: str = "lyralabs-admin"
+
+    # Agent runtime mode. "legacy" runs the classifier->planner->executor->critic
+    # graph; "unified" runs the single tool-using LLM with a submit_plan_for_approval
+    # meta-tool. Flip via env var to roll back without redeploy.
+    agent_mode: Literal["legacy", "unified"] = "legacy"
 
     @field_validator("master_encryption_key")
     @classmethod

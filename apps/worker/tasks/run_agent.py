@@ -12,11 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import select
-
 from lyra_core.agent.checkpointer import checkpointer
 from lyra_core.agent.graph import build_agent_graph
-from lyra_core.channels.schema import InboundMessage, Surface
+from lyra_core.channels.schema import InboundMessage
 from lyra_core.common.audit import record_event
 from lyra_core.common.logging import get_logger
 from lyra_core.db.models import Job, Tenant
@@ -26,6 +24,7 @@ from lyra_core.db.session import async_session
 from lyra_core.tools import artifacts as _artifacts  # noqa: F401
 from lyra_core.tools import ghl as _ghl  # noqa: F401
 from lyra_core.tools import google as _google  # noqa: F401
+from sqlalchemy import select
 
 from ..celery_app import celery
 
@@ -33,37 +32,37 @@ log = get_logger(__name__)
 
 
 @celery.task(bind=True, name="apps.worker.tasks.run_agent.run_agent")
-def run_agent(self, message_json: str) -> dict:  # noqa: ANN001, ARG001
+def run_agent(self, message_json: str) -> dict:
     return asyncio.run(_run(message_json))
 
 
 @celery.task(bind=True, name="apps.worker.tasks.run_agent.resume_agent")
-def resume_agent(self, *, job_id: str, decision: str, user_id: str) -> dict:  # noqa: ANN001, ARG001
+def resume_agent(self, *, job_id: str, decision: str, user_id: str) -> dict:
     return asyncio.run(_resume(job_id=job_id, decision=decision, user_id=user_id))
-
-
-async def _resolve_tenant(external_id: str, channel: Surface) -> Tenant | None:
-    async with async_session() as s:
-        return (
-            await s.execute(select(Tenant).where(Tenant.external_team_id == external_id))
-        ).scalar_one_or_none()
 
 
 async def _run(message_json: str) -> dict:
     msg = InboundMessage.model_validate_json(message_json)
-    tenant = await _resolve_tenant(msg.tenant_external_id, msg.surface)
-    if tenant is None:
-        log.error("run_agent.no_tenant", external_id=msg.tenant_external_id)
-        return {"status": "no_tenant"}
 
-    if tenant.status not in {"active"}:
-        log.warning("run_agent.tenant_not_active", tenant_id=tenant.id, status=tenant.status)
-        return {"status": "tenant_inactive"}
-
-    # Persist a Job row to track this invocation.
+    # One session for tenant lookup + job insert. Each round-trip to
+    # Supabase Tokyo from us-east1 is ~200ms; pipelining shaves
+    # ~300-400ms vs. the previous separate-session pattern.
     async with async_session() as s:
+        tenant = (
+            await s.execute(
+                select(Tenant).where(Tenant.external_team_id == msg.tenant_external_id)
+            )
+        ).scalar_one_or_none()
+        if tenant is None:
+            log.error("run_agent.no_tenant", external_id=msg.tenant_external_id)
+            return {"status": "no_tenant"}
+        if tenant.status != "active":
+            log.warning("run_agent.tenant_not_active", tenant_id=tenant.id, status=tenant.status)
+            return {"status": "tenant_inactive"}
+
+        tenant_id = tenant.id
         job = Job(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             thread_id=f"{msg.surface}:{msg.channel_id}:{msg.thread_id}",
             user_id=msg.user_id,
             channel_id=msg.channel_id,
@@ -74,13 +73,13 @@ async def _run(message_json: str) -> dict:
             status="running",
         )
         s.add(job)
-        await s.commit()
-        await s.refresh(job)
+        await s.flush()  # populates job.id without a separate refresh round-trip
         job_id = job.id
         thread_id = job.thread_id
+        await s.commit()
 
     initial_state = {
-        "tenant_id": tenant.id,
+        "tenant_id": tenant_id,
         "job_id": job_id,
         "channel_id": msg.channel_id,
         "thread_id": msg.thread_id,
@@ -98,7 +97,7 @@ async def _run(message_json: str) -> dict:
         graph = build_agent_graph(saver)
         try:
             final = await graph.ainvoke(initial_state, config=config)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("run_agent.crash", job_id=job_id, error=str(exc))
             await _mark_job(job_id, status="failed", error=str(exc))
             return {"status": "failed", "error": str(exc)}
@@ -142,7 +141,7 @@ async def _resume(*, job_id: str, decision: str, user_id: str) -> dict:
             final = await graph.ainvoke(
                 Command(resume={"decision": decision}), config=config  # type: ignore[arg-type]
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("resume_agent.crash", job_id=job_id, error=str(exc))
             await _mark_job(job_id, status="failed", error=str(exc))
             return {"status": "failed", "error": str(exc)}

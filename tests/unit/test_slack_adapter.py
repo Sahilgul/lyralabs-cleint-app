@@ -201,6 +201,114 @@ async def test_enqueue_channel_mention_threads_on_user_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_enqueue_dm_with_client_fires_assistant_status() -> None:
+    """DM events with a client get a native 'Thinking…' status indicator."""
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    client = MagicMock()
+    client.assistant_threads_setStatus = AsyncMock()
+    client.reactions_add = AsyncMock()
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "D-dm",
+                    "channel_type": "im",
+                    "user": "U",
+                    "text": "hello",
+                    "ts": "9999.0000",
+                },
+            },
+            client,
+        )
+
+    client.assistant_threads_setStatus.assert_awaited_once()
+    kwargs = client.assistant_threads_setStatus.await_args.kwargs
+    assert kwargs["channel_id"] == "D-dm"
+    assert kwargs["thread_ts"] == "9999.0000"
+    assert kwargs["status"] == "Thinking…"
+    client.reactions_add.assert_not_called()
+    assert fake_run_agent.delay.called  # still enqueues
+
+
+@pytest.mark.asyncio
+async def test_enqueue_channel_with_client_fires_reaction() -> None:
+    """Channel @-mentions fall back to an :eyes: reaction since
+    assistant.threads.setStatus only works in assistant threads."""
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    client = MagicMock()
+    client.assistant_threads_setStatus = AsyncMock()
+    client.reactions_add = AsyncMock()
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "user": "U",
+                    "text": "<@bot> status",
+                    "ts": "3333.3333",
+                },
+            },
+            client,
+        )
+
+    client.reactions_add.assert_awaited_once()
+    kwargs = client.reactions_add.await_args.kwargs
+    assert kwargs["channel"] == "C-general"
+    assert kwargs["timestamp"] == "3333.3333"
+    assert kwargs["name"] == "eyes"
+    client.assistant_threads_setStatus.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_indicator_failure_is_swallowed() -> None:
+    """If Slack rejects setStatus (e.g. app missing assistant scope) we
+    still enqueue the agent task -- the indicator is best-effort feedback."""
+    from slack_sdk.errors import SlackApiError
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    fake_response = MagicMock()
+    fake_response.data = {"error": "missing_scope"}
+    client = MagicMock()
+    client.assistant_threads_setStatus = AsyncMock(
+        side_effect=SlackApiError("nope", fake_response)
+    )
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "D-dm",
+                    "channel_type": "im",
+                    "user": "U",
+                    "text": "hi",
+                    "ts": "1.0",
+                },
+            },
+            client,
+        )
+
+    assert fake_run_agent.delay.called
+
+
+@pytest.mark.asyncio
 async def test_disable_workspace_marks_tenant_cancelled(monkeypatch) -> None:
     """`_disable_workspace` must clear bot tokens + cancel the tenant."""
     from lyra_core.db.models import SlackInstallation, Tenant

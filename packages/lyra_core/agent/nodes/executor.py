@@ -91,7 +91,7 @@ async def executor_node(state: AgentState) -> dict[str, Any]:
         try:
             resolved_args = _resolve_args(step.args, prior)
             args_obj = tool.Input(**resolved_args)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             res = StepResult(
                 step_id=step.id,
                 tool_name=step.tool_name,
@@ -103,7 +103,7 @@ async def executor_node(state: AgentState) -> dict[str, Any]:
 
         try:
             tr = await tool.safe_run(ctx, args_obj)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             tr = None
             log.exception("executor.tool_crash", step=step.id, tool=step.tool_name)
             res = StepResult(

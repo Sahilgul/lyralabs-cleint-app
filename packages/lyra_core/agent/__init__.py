@@ -5,7 +5,7 @@ from .state import AgentState, Plan, PlanStep
 __all__ = ["AgentState", "Plan", "PlanStep", "build_agent_graph"]
 
 
-def build_agent_graph(checkpointer):  # noqa: ANN001 - deferred import
+def build_agent_graph(checkpointer):
     """Lazy passthrough so importing lyra_core.agent doesn't pull in langgraph."""
     from .graph import build_agent_graph as _impl
 

@@ -15,6 +15,8 @@ from typing import Any
 from slack_bolt.adapter.starlette.async_handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.oauth.async_oauth_settings import AsyncOAuthSettings
+from slack_bolt.response import BoltResponse
+from slack_sdk.errors import SlackApiError
 
 from ...common.config import get_settings
 from ...common.logging import get_logger
@@ -96,28 +98,33 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
                 retry_num=retry_num if isinstance(retry_num, str) else retry_num[0],
                 reason=request.headers.get("x-slack-retry-reason"),
             )
-            # Returning without calling next_() ends the middleware chain;
-            # Bolt's outer handler responds 200 OK.
-            return
+            # MUST return a BoltResponse, not bare `return`. Without an
+            # explicit response, slack_bolt's listener loop ends with no
+            # match and the Starlette handler emits 404. Slack treats 404
+            # as a delivery failure and retries again, producing a noisy
+            # loop of 404s in Cloud Run logs (the handler is still
+            # short-circuited so no duplicate work happens, but Slack
+            # eventually marks the endpoint as flaky).
+            return BoltResponse(status=200, body="")
         await next_()
 
     @app.event("app_mention")
-    async def on_mention(body: dict[str, Any], ack: Any, say: Any) -> None:
+    async def on_mention(body: dict[str, Any], ack: Any, say: Any, client: Any) -> None:
         await ack()
-        await _enqueue_from_event(body)
+        await _enqueue_from_event(body, client)
 
     @app.event("message")
-    async def on_message(body: dict[str, Any], ack: Any) -> None:
+    async def on_message(body: dict[str, Any], ack: Any, client: Any) -> None:
         await ack()
         event = body.get("event", {})
         # Only respond in DMs or threads we're in; ignore bot messages.
         if event.get("bot_id") or event.get("subtype"):
             return
         if event.get("channel_type") == "im":
-            await _enqueue_from_event(body)
+            await _enqueue_from_event(body, client)
 
     @app.command("/arlo")
-    async def slash_command(ack: Any, command: dict[str, Any]) -> None:
+    async def slash_command(ack: Any, command: dict[str, Any], client: Any) -> None:
         await ack(f"On it: _{command.get('text', '')}_")
         # Enqueue a synthetic event mirroring the slash command.
         synthetic = {
@@ -131,7 +138,7 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
                 "thread_ts": None,
             },
         }
-        await _enqueue_from_event(synthetic)
+        await _enqueue_from_event(synthetic, client)
 
     @app.event("app_uninstalled")
     async def on_uninstalled(ack: Any, body: dict[str, Any]) -> None:
@@ -185,7 +192,7 @@ async def _disable_workspace(team_id: str | None) -> None:
         await s.commit()
 
 
-async def _enqueue_from_event(body: dict[str, Any]) -> None:
+async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     """Translate a Slack event into InboundMessage + dispatch to Celery.
 
     Threading rules (so the DM UX stays linear and channel mentions stay tidy):
@@ -198,6 +205,10 @@ async def _enqueue_from_event(body: dict[str, Any]) -> None:
     thread_ts when present, else the message ts, so each new top-level
     user message starts a fresh agent conversation rather than leaking
     state from the previous one.
+
+    If `client` is provided we also fire a "Thinking…" status indicator
+    so the user sees feedback within ~100ms instead of waiting for the
+    worker to post the real reply (~3-5s).
     """
     from apps.worker.tasks.run_agent import run_agent  # noqa: PLC0415
 
@@ -235,4 +246,38 @@ async def _enqueue_from_event(body: dict[str, Any]) -> None:
         is_dm=is_dm,
         text_len=len(msg.text),
     )
+
+    # Fire feedback within ~100ms so the user knows ARLO heard them.
+    # DMs: native Slack assistant typing indicator (clears automatically
+    # when the bot posts a message). Channel mentions: an :eyes: reaction
+    # (no native indicator exists outside assistant threads).
+    if client is not None:
+        await _post_thinking_indicator(client, msg, is_dm)
+
     run_agent.delay(message_json=msg.model_dump_json())
+
+
+async def _post_thinking_indicator(client: Any, msg: InboundMessage, is_dm: bool) -> None:
+    """Best-effort feedback. Never raises -- agent must run regardless."""
+    try:
+        if is_dm:
+            await client.assistant_threads_setStatus(
+                channel_id=msg.channel_id,
+                thread_ts=msg.thread_id,
+                status="Thinking…",
+            )
+        else:
+            await client.reactions_add(
+                channel=msg.channel_id,
+                timestamp=msg.thread_id,
+                name="eyes",
+            )
+    except SlackApiError as e:
+        # Common reasons: app missing the assistant feature / scope, the
+        # thread isn't an assistant thread, the reaction already exists.
+        # All non-fatal -- the agent still runs and posts a real reply.
+        log.info(
+            "slack.indicator.skipped",
+            kind="status" if is_dm else "reaction",
+            error=getattr(e.response, "data", {}).get("error", str(e)),
+        )

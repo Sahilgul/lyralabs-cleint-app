@@ -1,21 +1,19 @@
-"""apps.worker.tasks.run_agent — covers _run, _resume, _resolve_tenant, _mark_job."""
+"""apps.worker.tasks.run_agent — covers _run, _resume, _mark_job."""
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from lyra_core.channels.schema import InboundMessage, Surface
+from lyra_core.db.models import Job, Tenant
 
 from apps.worker.tasks import run_agent as task_mod
 from apps.worker.tasks.run_agent import (
     _mark_job,
-    _resolve_tenant,
     _resume,
     _run,
 )
-from lyra_core.channels.schema import InboundMessage, Surface
-from lyra_core.db.models import Job, Tenant
 
 
 def _make_msg(text: str = "do x") -> str:
@@ -82,26 +80,6 @@ class _FakeSession:
 
 
 # -----------------------------------------------------------------------------
-# _resolve_tenant
-# -----------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resolve_tenant_found(monkeypatch) -> None:
-    t = _tenant()
-    _patch_session_chain(monkeypatch, [_FakeSession(tenant=t)])
-    out = await _resolve_tenant("T-XYZ", Surface.SLACK)
-    assert out is t
-
-
-@pytest.mark.asyncio
-async def test_resolve_tenant_missing(monkeypatch) -> None:
-    _patch_session_chain(monkeypatch, [_FakeSession(tenant=None)])
-    out = await _resolve_tenant("T-NA", Surface.SLACK)
-    assert out is None
-
-
-# -----------------------------------------------------------------------------
 # _run
 # -----------------------------------------------------------------------------
 
@@ -122,7 +100,7 @@ async def test_run_inactive_tenant(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_happy_path_invokes_graph(monkeypatch) -> None:
-    """Tenant active -> Job created -> graph runs -> job marked done."""
+    """Tenant active -> Job created (same session) -> graph runs -> job marked done."""
     job_state = {}
     job_row = Job(
         tenant_id="tenant-1", thread_id="t", user_id="u", user_request="x", status="running"
@@ -130,8 +108,8 @@ async def test_run_happy_path_invokes_graph(monkeypatch) -> None:
     job_row.id = "job-uuid-1"
 
     sessions = [
-        _FakeSession(tenant=_tenant()),  # _resolve_tenant
-        _FakeSession(captured=job_state),  # create job
+        # Single session now handles both the tenant SELECT and the Job INSERT.
+        _FakeSession(tenant=_tenant(), captured=job_state),
         _FakeSession(job=job_row),  # _mark_job lookup
     ]
     _patch_session_chain(monkeypatch, sessions)
@@ -169,8 +147,8 @@ async def test_run_graph_crash_marks_job_failed(monkeypatch) -> None:
     job_row.id = "job-uuid-1"
 
     sessions = [
+        # Single session now handles both the tenant SELECT and the Job INSERT.
         _FakeSession(tenant=_tenant()),
-        _FakeSession(),
         _FakeSession(job=job_row),
     ]
     _patch_session_chain(monkeypatch, sessions)

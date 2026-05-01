@@ -144,8 +144,11 @@ async def test_list_providers_merges_catalog_with_db_state(monkeypatch) -> None:
     # DB-less providers still appear, just with configured=False
     assert payload["openai"]["configured"] is False
     assert payload["openai"]["has_api_key"] is False
-    # No raw key field anywhere in the response
-    assert "api_key" not in r.text
+    # No raw key field or value anywhere in the response. (Substring "api_key"
+    # alone would match "has_api_key", so check the JSON field name and the
+    # plaintext secret explicitly.)
+    assert '"api_key"' not in r.text
+    assert "sk-real" not in r.text
 
 
 @pytest.mark.asyncio
@@ -276,6 +279,13 @@ async def test_set_assignment_writes_row_and_invalidates() -> None:
         _scalar_result(_provider_row(key="qwen", api_key="sk-x")),  # provider exists
         _scalar_result(None),  # no existing assignment
     ]
+
+    # Simulate the DB-side default firing on refresh — server_default/onupdate
+    # populate updated_at after commit, which the endpoint then serializes.
+    async def _refresh(row):
+        row.updated_at = datetime.now(UTC)
+
+    s.refresh = AsyncMock(side_effect=_refresh)
 
     import apps.api.admin.llm as admin_mod
 

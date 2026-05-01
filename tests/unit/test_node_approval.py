@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-
 from lyra_core.agent.nodes import approval as approval_mod
 from lyra_core.agent.nodes.approval import (
     _plan_preview_blocks,
@@ -88,8 +87,9 @@ class TestPreviewBlocks:
 async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) -> None:
     """interrupt() returns the decision when resumed; we mock it to skip the actual interruption."""
     plan = _plan(has_write=True)
+    plan_dict = plan.model_dump()
     state = {
-        "plan": plan.model_dump(),
+        "plan": plan_dict,
         "job_id": "j-1",
         "thread_id": "thr",
         "channel_id": "ch",
@@ -99,7 +99,10 @@ async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) ->
     monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "approved")
 
     out = await approval_node(state)  # type: ignore[arg-type]
-    assert out == {"approval_decision": "approved"}
+    assert out["approval_decision"] == "approved"
+    # Plan is promoted to the canonical `plan` field for the executor.
+    assert out["plan"] == plan_dict
+    assert out["pending_plan"] is None
 
 
 @pytest.mark.asyncio
@@ -115,7 +118,7 @@ async def test_approval_node_handles_dict_decision(monkeypatch) -> None:
     monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
     monkeypatch.setattr(approval_mod, "interrupt", lambda payload: {"decision": "rejected"})
     out = await approval_node(state)  # type: ignore[arg-type]
-    assert out == {"approval_decision": "rejected"}
+    assert out["approval_decision"] == "rejected"
 
 
 @pytest.mark.asyncio
@@ -131,7 +134,29 @@ async def test_approval_node_unknown_decision_defaults_rejected(monkeypatch) -> 
     monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
     monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "garbage")
     out = await approval_node(state)  # type: ignore[arg-type]
-    assert out == {"approval_decision": "rejected"}
+    assert out["approval_decision"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_approval_node_reads_pending_plan_in_unified_mode(monkeypatch) -> None:
+    """Unified-mode flow: agent sets `pending_plan` via submit_plan_for_approval.
+    approval_node must read it (not `plan`) and promote it on approve."""
+    plan = _plan(has_write=True)
+    plan_dict = plan.model_dump()
+    state = {
+        "pending_plan": plan_dict,
+        "job_id": "j-1",
+        "thread_id": "thr",
+        "channel_id": "ch",
+        "tenant_id": "tenant-1",
+    }
+    monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
+    monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "approved")
+
+    out = await approval_node(state)  # type: ignore[arg-type]
+    assert out["approval_decision"] == "approved"
+    assert out["plan"] == plan_dict
+    assert out["pending_plan"] is None
 
 
 @pytest.mark.asyncio

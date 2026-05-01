@@ -6,10 +6,9 @@ whether the result is good enough to ship or whether to retry.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, Literal
-
-import base64
 
 from ...channels.schema import Artifact, OutboundReply
 from ...channels.slack.poster import post_reply

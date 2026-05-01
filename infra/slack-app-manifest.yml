@@ -12,6 +12,13 @@ features:
   bot_user:
     display_name: ARLO
     always_online: true
+  assistant_view:
+    assistant_description: "ARLO — your AI coworker for GHL + Google Workspace"
+    suggested_prompts:
+      - title: "Pull stuck deals"
+        message: "Show me deals stuck in Negotiation > 7 days"
+      - title: "Draft follow-up"
+        message: "Draft a follow-up SMS for each deal that hasn't replied this week"
   slash_commands:
     - command: /arlo
       url: https://<YOUR_DOMAIN>/slack/events
@@ -24,6 +31,7 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      - assistant:write
       - channels:history
       - channels:read
       - chat:write
@@ -33,6 +41,7 @@ oauth_config:
       - im:history
       - im:read
       - im:write
+      - reactions:write
       - users:read
 settings:
   event_subscriptions:

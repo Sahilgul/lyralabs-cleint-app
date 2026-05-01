@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
 from ...channels.schema import OutboundReply
 from ...channels.slack.poster import post_reply
@@ -71,8 +71,15 @@ def route_after_plan(state: AgentState) -> Literal["approval", "executor", "smal
 
 
 async def approval_node(state: AgentState) -> dict[str, Any]:
-    """Post a preview to Slack, then interrupt the graph."""
-    plan = Plan.model_validate(state["plan"])
+    """Post a preview to Slack, then interrupt the graph.
+
+    Reads from `pending_plan` (unified mode, set by `submit_plan_for_approval`)
+    or `plan` (legacy mode, set by planner_node). On approval the pending
+    plan is promoted to `plan` so the executor reads a uniform field
+    regardless of which graph produced it.
+    """
+    plan_dict = state.get("pending_plan") or state.get("plan")
+    plan = Plan.model_validate(plan_dict)
     blocks = _plan_preview_blocks(plan, state["job_id"])
 
     reply = OutboundReply(
@@ -93,7 +100,13 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
     if decision not in {"approved", "rejected"}:
         decision = "rejected"
 
-    return {"approval_decision": decision}
+    return {
+        "approval_decision": decision,
+        # Promote pending_plan -> plan so the executor sees the same
+        # `state["plan"]` shape as the legacy graph.
+        "plan": plan_dict,
+        "pending_plan": None,
+    }
 
 
 def route_after_approval(state: AgentState) -> Literal["executor", "rejected_reply"]:

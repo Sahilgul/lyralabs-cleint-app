@@ -172,6 +172,7 @@ def patch_chat(monkeypatch, mock_litellm_response):
         "lyra_core.agent.nodes.planner",
         "lyra_core.agent.nodes.critic",
         "lyra_core.agent.nodes.smalltalk",
+        "lyra_core.agent.nodes.agent",
     ]:
         mod = sys.modules.get(mod_name)
         if mod is not None and hasattr(mod, "chat"):
