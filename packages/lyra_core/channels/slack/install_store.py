@@ -129,10 +129,70 @@ class PostgresInstallationStore(AsyncInstallationStore):
             log.info("slack.install.saved", team_id=team_id, tenant_id=tenant_id)
 
     async def async_save_bot(self, bot: Bot) -> None:
-        # Bolt always calls async_save with the full Installation before
-        # async_save_bot, so the row is already persisted. No-op here avoids
-        # writing duplicate rows that would split bot+install state.
-        return None
+        """Persist a refreshed bot token in place.
+
+        Bolt calls this in two distinct cases:
+          1. Right after the initial OAuth completes -- `async_save` has already
+             written a full row, so we'd just be re-writing what's there.
+          2. After token rotation refreshes the bot token -- a NEW token has
+             been issued and we MUST update the row so subsequent requests
+             don't keep using the expired one.
+
+        Originally we no-oped this assuming case 1, which broke case 2 silently:
+        every refresh succeeded for the in-flight request but the new token was
+        thrown away, so 12 hours later the bot looked broken (slack_bolt logs
+        "AuthorizeResult was not found" because find_bot returned a stale row
+        whose token Slack rejects). Now we always update -- if the row is
+        already current the UPDATE is a no-op at the DB level.
+
+        We never INSERT here; row creation is owned by `async_save`. If no row
+        exists yet we log and return; that path indicates the install was never
+        completed (or was deleted), which is recoverable by re-installing.
+        """
+        team_id = bot.team_id or bot.enterprise_id
+        if not team_id:
+            log.warning("slack.save_bot.skip_no_team_id")
+            return
+
+        async with async_session() as s:
+            stmt = select(SlackInstallation).order_by(SlackInstallation.installed_at.desc())
+            if bot.team_id:
+                stmt = stmt.where(SlackInstallation.team_id == bot.team_id)
+            if bot.enterprise_id:
+                stmt = stmt.where(SlackInstallation.enterprise_id == bot.enterprise_id)
+            row = (await s.execute(stmt.limit(1))).scalar_one_or_none()
+            if row is None:
+                log.warning(
+                    "slack.save_bot.no_existing_install",
+                    team_id=team_id,
+                    enterprise_id=bot.enterprise_id,
+                )
+                return
+
+            if bot.bot_token:
+                row.bot_token_encrypted = encrypt_for_tenant(row.tenant_id, bot.bot_token)
+            if bot.bot_refresh_token:
+                row.bot_refresh_token_encrypted = encrypt_for_tenant(
+                    row.tenant_id, bot.bot_refresh_token
+                )
+            if bot.bot_token_expires_at is not None:
+                row.bot_token_expires_at = datetime.fromtimestamp(
+                    bot.bot_token_expires_at, tz=UTC
+                )
+            if bot.bot_id:
+                row.bot_id = bot.bot_id
+            if bot.bot_user_id:
+                row.bot_user_id = bot.bot_user_id
+
+            await s.commit()
+            log.info(
+                "slack.bot.refreshed",
+                team_id=team_id,
+                tenant_id=row.tenant_id,
+                expires_at=(
+                    row.bot_token_expires_at.isoformat() if row.bot_token_expires_at else None
+                ),
+            )
 
     async def async_find_bot(
         self,
