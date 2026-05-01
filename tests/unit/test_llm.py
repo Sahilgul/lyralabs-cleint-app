@@ -1,169 +1,163 @@
-"""lyra_core.common.llm."""
+"""lyra_core.common.llm — chat() now resolves model + creds via the router."""
 
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from lyra_core.common import llm
-from lyra_core.common.config import Settings
-from lyra_core.common.llm import ModelTier, _configure_keys, _model_for_tier, chat, estimate_cost
+from lyra_core.common.llm import ModelTier, chat, estimate_cost
+from lyra_core.llm.router import ResolvedModel
 
 
-class TestModelForTier:
-    def test_primary_returns_settings_primary(self) -> None:
-        assert _model_for_tier(ModelTier.PRIMARY) == llm.get_settings().llm_primary_model
+def _resolved(
+    *,
+    tier: str = "cheap",
+    provider_key: str = "qwen",
+    model_id: str = "dashscope/qwen-turbo",
+    api_key: str | None = "sk-test",
+    api_base: str | None = "https://example.com/v1",
+    extra_kwargs: dict | None = None,
+    source: str = "db",
+) -> ResolvedModel:
+    return ResolvedModel(
+        tier=tier,
+        provider_key=provider_key,
+        model_id=model_id,
+        api_key=api_key,
+        api_base=api_base,
+        extra_kwargs=extra_kwargs or {},
+        source=source,  # type: ignore[arg-type]
+    )
 
-    def test_cheap_returns_settings_cheap(self) -> None:
-        assert _model_for_tier(ModelTier.CHEAP) == llm.get_settings().llm_cheap_model
 
-    def test_unknown_tier_falls_through_to_cheap(self) -> None:
-        # The current implementation: anything not PRIMARY -> CHEAP. Verifies that.
-        # Build a fake enum value via cast to confirm the else branch.
-        class Fake:
-            value = "fake"
-
-        assert _model_for_tier(Fake()) == llm.get_settings().llm_cheap_model  # type: ignore[arg-type]
+def _patch_resolve(monkeypatch, resolved: ResolvedModel) -> AsyncMock:
+    mock = AsyncMock(return_value=resolved)
+    monkeypatch.setattr(llm, "resolve", mock)
+    return mock
 
 
 class TestChat:
     @pytest.mark.asyncio
-    async def test_chat_calls_acompletion_with_primary_model(
-        self, monkeypatch, mock_litellm_response
-    ) -> None:
-        mock_acompletion = AsyncMock(return_value=mock_litellm_response("hi", cost=0.001))
+    async def test_chat_uses_router_model(self, monkeypatch, mock_litellm_response) -> None:
+        _patch_resolve(monkeypatch, _resolved(model_id="dashscope/qwen-max"))
+        mock_acompletion = AsyncMock(return_value=mock_litellm_response("hi"))
         monkeypatch.setattr(llm, "acompletion", mock_acompletion)
 
-        resp = await chat(
+        await chat(
             tier=ModelTier.PRIMARY,
             messages=[{"role": "user", "content": "hello"}],
         )
 
-        assert resp.choices[0].message.content == "hi"
         kwargs = mock_acompletion.call_args.kwargs
-        assert kwargs["model"] == llm.get_settings().llm_primary_model
+        assert kwargs["model"] == "dashscope/qwen-max"
+        assert kwargs["messages"] == [{"role": "user", "content": "hello"}]
         assert kwargs["max_tokens"] == 4096
         assert kwargs["temperature"] == 0.2
-        assert kwargs["messages"] == [{"role": "user", "content": "hello"}]
 
     @pytest.mark.asyncio
-    async def test_chat_includes_tools_when_passed(
+    async def test_chat_passes_api_key_and_base_per_call(
         self, monkeypatch, mock_litellm_response
     ) -> None:
-        mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
-        monkeypatch.setattr(llm, "acompletion", mock_acompletion)
-        tools = [{"type": "function", "function": {"name": "x"}}]
-
-        await chat(tier=ModelTier.CHEAP, messages=[{"role": "user", "content": "h"}], tools=tools)
-
-        assert mock_acompletion.call_args.kwargs["tools"] == tools
-
-    @pytest.mark.asyncio
-    async def test_chat_includes_response_format_when_passed(
-        self, monkeypatch, mock_litellm_response
-    ) -> None:
-        mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
-        monkeypatch.setattr(llm, "acompletion", mock_acompletion)
-
-        await chat(
-            tier=ModelTier.CHEAP,
-            messages=[{"role": "user", "content": "h"}],
-            response_format={"type": "json_object"},
+        """Per-call api_key/api_base is the prefork-safe pattern -- no env mutation."""
+        _patch_resolve(
+            monkeypatch,
+            _resolved(
+                api_key="sk-real",
+                api_base="https://api.deepseek.com/v1",
+                provider_key="deepseek",
+                model_id="deepseek/deepseek-chat",
+            ),
         )
-
-        assert mock_acompletion.call_args.kwargs["response_format"] == {"type": "json_object"}
-
-    @pytest.mark.asyncio
-    async def test_chat_passes_metadata_for_cost_tracking(
-        self, monkeypatch, mock_litellm_response
-    ) -> None:
         mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
         monkeypatch.setattr(llm, "acompletion", mock_acompletion)
 
-        await chat(
-            tier=ModelTier.CHEAP,
-            messages=[{"role": "user", "content": "h"}],
-            metadata={"job_id": "j-1", "tenant_id": "t-1"},
-        )
+        await chat(tier=ModelTier.PRIMARY, messages=[{"role": "user", "content": "h"}])
 
-        assert mock_acompletion.call_args.kwargs["metadata"] == {
-            "job_id": "j-1",
-            "tenant_id": "t-1",
-        }
+        kwargs = mock_acompletion.call_args.kwargs
+        assert kwargs["model"] == "deepseek/deepseek-chat"
+        assert kwargs["api_key"] == "sk-real"
+        assert kwargs["api_base"] == "https://api.deepseek.com/v1"
 
     @pytest.mark.asyncio
-    async def test_chat_default_metadata_empty(self, monkeypatch, mock_litellm_response) -> None:
+    async def test_chat_omits_api_key_when_router_returns_none(
+        self, monkeypatch, mock_litellm_response
+    ) -> None:
+        """When the resolved model has no key (e.g. local Ollama), don't send a
+        bogus api_key= that LiteLLM might reject."""
+        _patch_resolve(monkeypatch, _resolved(api_key=None, api_base=None))
         mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
         monkeypatch.setattr(llm, "acompletion", mock_acompletion)
 
         await chat(tier=ModelTier.CHEAP, messages=[{"role": "user", "content": "h"}])
 
-        assert mock_acompletion.call_args.kwargs["metadata"] == {}
-
-
-class TestConfigureKeys:
-    """The _configure_keys() side-effect — registers provider keys with LiteLLM
-    or mirrors them into the env vars LiteLLM expects (DashScope/Qwen)."""
-
-    def test_qwen_key_mirrors_into_dashscope_env(self, monkeypatch) -> None:
-        # Start clean — strip any leakage from previous tests.
-        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-        monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
-
-        fake_settings = Settings(
-            database_url="postgresql+asyncpg://x:x@x/x",
-            database_url_sync="postgresql+psycopg://x:x@x/x",
-            master_encryption_key="0123456789abcdef0123456789abcdef0123456789ab=",
-            qwen_api_key="sk-dashscope-test-123",
-            qwen_api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        )
-        monkeypatch.setattr(llm, "get_settings", lambda: fake_settings)
-
-        _configure_keys()
-
-        assert os.environ["DASHSCOPE_API_KEY"] == "sk-dashscope-test-123"
-        assert (
-            os.environ["DASHSCOPE_API_BASE"]
-            == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        )
-
-    def test_qwen_key_unset_does_not_pollute_env(self, monkeypatch) -> None:
-        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-        monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
-
-        fake_settings = Settings(
-            database_url="postgresql+asyncpg://x:x@x/x",
-            database_url_sync="postgresql+psycopg://x:x@x/x",
-            master_encryption_key="0123456789abcdef0123456789abcdef0123456789ab=",
-            qwen_api_key="",  # not configured
-        )
-        monkeypatch.setattr(llm, "get_settings", lambda: fake_settings)
-
-        _configure_keys()
-
-        assert "DASHSCOPE_API_KEY" not in os.environ
+        kwargs = mock_acompletion.call_args.kwargs
+        assert "api_key" not in kwargs
+        assert "api_base" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_chat_routes_dashscope_qwen_model_through_acompletion(
+    async def test_chat_forwards_extra_config(
         self, monkeypatch, mock_litellm_response
     ) -> None:
-        """Sanity check: a `dashscope/qwen-max` tier model is forwarded to
-        LiteLLM verbatim — LiteLLM owns provider routing from there."""
-        fake_settings = Settings(
-            database_url="postgresql+asyncpg://x:x@x/x",
-            database_url_sync="postgresql+psycopg://x:x@x/x",
-            master_encryption_key="0123456789abcdef0123456789abcdef0123456789ab=",
-            llm_primary_model="dashscope/qwen-max",
+        """Provider-specific config (e.g. OpenAI org, Azure deployment_id) flows
+        through to LiteLLM as kwargs."""
+        _patch_resolve(
+            monkeypatch,
+            _resolved(extra_kwargs={"organization": "org-123", "project": "proj-x"}),
         )
-        monkeypatch.setattr(llm, "get_settings", lambda: fake_settings)
-        mock_acompletion = AsyncMock(return_value=mock_litellm_response("salaam"))
+        mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
         monkeypatch.setattr(llm, "acompletion", mock_acompletion)
 
-        await chat(tier=ModelTier.PRIMARY, messages=[{"role": "user", "content": "hi"}])
+        await chat(tier=ModelTier.CHEAP, messages=[{"role": "user", "content": "h"}])
 
-        assert mock_acompletion.call_args.kwargs["model"] == "dashscope/qwen-max"
+        kwargs = mock_acompletion.call_args.kwargs
+        assert kwargs["organization"] == "org-123"
+        assert kwargs["project"] == "proj-x"
+
+    @pytest.mark.asyncio
+    async def test_chat_extra_config_cannot_override_canonical_args(
+        self, monkeypatch, mock_litellm_response
+    ) -> None:
+        """A misconfigured extra_config must NOT be able to swap out the model
+        or messages -- those are caller-owned."""
+        _patch_resolve(
+            monkeypatch,
+            _resolved(
+                model_id="dashscope/qwen-turbo",
+                extra_kwargs={"model": "evil/model", "messages": "evil"},
+            ),
+        )
+        mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
+        monkeypatch.setattr(llm, "acompletion", mock_acompletion)
+
+        await chat(tier=ModelTier.CHEAP, messages=[{"role": "user", "content": "real"}])
+
+        kwargs = mock_acompletion.call_args.kwargs
+        assert kwargs["model"] == "dashscope/qwen-turbo"
+        assert kwargs["messages"] == [{"role": "user", "content": "real"}]
+
+    @pytest.mark.asyncio
+    async def test_chat_passes_tools_and_response_format_and_metadata(
+        self, monkeypatch, mock_litellm_response
+    ) -> None:
+        _patch_resolve(monkeypatch, _resolved())
+        mock_acompletion = AsyncMock(return_value=mock_litellm_response("ok"))
+        monkeypatch.setattr(llm, "acompletion", mock_acompletion)
+        tools = [{"type": "function", "function": {"name": "x"}}]
+
+        await chat(
+            tier=ModelTier.CHEAP,
+            messages=[{"role": "user", "content": "h"}],
+            tools=tools,
+            response_format={"type": "json_object"},
+            metadata={"job_id": "j-1"},
+        )
+
+        kwargs = mock_acompletion.call_args.kwargs
+        assert kwargs["tools"] == tools
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert kwargs["metadata"] == {"job_id": "j-1"}
 
 
 class TestEstimateCost:
@@ -178,5 +172,5 @@ class TestEstimateCost:
         assert estimate_cost(resp) == pytest.approx(0.0042)
 
     def test_handles_missing_attribute_gracefully(self) -> None:
-        resp = object()  # no _hidden_params
+        resp = object()
         assert estimate_cost(resp) == 0.0

@@ -1,32 +1,30 @@
-"""LLM router using LiteLLM.
+"""LLM call surface, multi-provider via LiteLLM.
 
-Two tiers:
-  - PRIMARY (Claude Sonnet 4.5 by default): planner, executor reasoning, critic-on-error.
-  - CHEAP (Gemini Flash by default): classifier, critic-pass, simple summarizers.
+Two tiers (callers pick one):
+  - PRIMARY: planner, executor reasoning, critic-on-error.
+  - CHEAP:   classifier, smalltalk, cheap-pass critic.
 
-All call sites must pick a tier explicitly. Tier names are stable;
-underlying model can change via env without touching code.
+Per-tier model + credentials are resolved at call time by
+`lyra_core.llm.router.resolve(tier)`. The router reads the active
+`(provider, model_id, api_key, api_base, extra_config)` from Postgres
+(populated by the super-admin via the admin UI), with a 30-second
+in-process cache and an env-var fallback for fresh deployments.
 
-Supported providers (set via LLM_PRIMARY_MODEL / LLM_CHEAP_MODEL):
-  - Anthropic:  anthropic/claude-sonnet-4-5, anthropic/claude-haiku-4
-  - OpenAI:     openai/gpt-4o, openai/gpt-4o-mini
-  - Gemini:     gemini/gemini-2.5-flash, gemini/gemini-2.5-pro
-  - Qwen:       dashscope/qwen-max, dashscope/qwen-plus, dashscope/qwen-turbo,
-                dashscope/qwen2.5-72b-instruct, dashscope/qwen2.5-coder-32b-instruct
-  - DeepSeek:   deepseek/deepseek-chat (V3, general), deepseek/deepseek-reasoner (R1)
+This means the agent can be hot-switched between Qwen / DeepSeek /
+OpenAI / Anthropic / Gemini / Moonshot / MiniMax / Z.AI from the admin
+panel without any redeploy. See `packages/lyra_core/llm/catalog.py`
+for the catalog of supported providers and known model IDs.
 """
 
 from __future__ import annotations
 
-import os
 from enum import StrEnum
 from typing import Any
 
-import litellm
 from litellm import acompletion
 from litellm.types.utils import ModelResponse
 
-from .config import get_settings
+from ..llm.router import resolve
 from .logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,37 +33,6 @@ logger = get_logger(__name__)
 class ModelTier(StrEnum):
     PRIMARY = "primary"
     CHEAP = "cheap"
-
-
-def _model_for_tier(tier: ModelTier) -> str:
-    settings = get_settings()
-    if tier is ModelTier.PRIMARY:
-        return settings.llm_primary_model
-    return settings.llm_cheap_model
-
-
-def _configure_keys() -> None:
-    settings = get_settings()
-    if settings.anthropic_api_key:
-        litellm.anthropic_key = settings.anthropic_api_key
-    if settings.openai_api_key:
-        litellm.openai_key = settings.openai_api_key
-    if settings.google_api_key:
-        litellm.gemini_key = settings.google_api_key
-    # Qwen (Alibaba DashScope). LiteLLM's dashscope/* provider reads the
-    # standard DashScope env vars, so we just mirror our typed setting into
-    # the env. This keeps a single source of truth (.env) and lets users
-    # override the regional endpoint via QWEN_API_BASE.
-    if settings.qwen_api_key:
-        os.environ["DASHSCOPE_API_KEY"] = settings.qwen_api_key
-        if settings.qwen_api_base:
-            os.environ["DASHSCOPE_API_BASE"] = settings.qwen_api_base
-    # DeepSeek (V3 / R1). LiteLLM's deepseek/* provider reads DEEPSEEK_API_KEY.
-    if settings.deepseek_api_key:
-        os.environ["DEEPSEEK_API_KEY"] = settings.deepseek_api_key
-
-
-_configure_keys()
 
 
 async def chat(
@@ -80,24 +47,47 @@ async def chat(
 ) -> ModelResponse:
     """Single chat completion. Caller passes OpenAI-format messages.
 
-    `metadata` is passed to LiteLLM for cost-tracking / logging hooks.
+    Resolves the active (model, api_key, api_base, ...) from the runtime
+    router so admin-panel switches take effect on the next call (modulo
+    the router's 30s cache TTL).
+
+    `api_key` and `api_base` are passed *per call* rather than via env
+    vars -- this is the prefork-safe pattern: no shared mutable state
+    between Celery workers, and no surprises if one tier is on
+    OpenAI-compat (Z.AI, Moonshot, MiniMax) while another is on a
+    direct provider (Anthropic, Gemini).
     """
-    model = _model_for_tier(tier)
+    resolved = await resolve(tier.value)  # type: ignore[arg-type]
+
     kwargs: dict[str, Any] = {
-        "model": model,
+        "model": resolved.model_id,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "metadata": metadata or {},
     }
+    if resolved.api_key:
+        kwargs["api_key"] = resolved.api_key
+    if resolved.api_base:
+        kwargs["api_base"] = resolved.api_base
+    for k, v in resolved.extra_kwargs.items():
+        # Don't let extra_config stomp the canonical model/messages args.
+        if k not in {"model", "messages"}:
+            kwargs[k] = v
     if tools:
         kwargs["tools"] = tools
     if response_format:
         kwargs["response_format"] = response_format
 
-    logger.debug("llm.call", model=model, n_messages=len(messages), n_tools=len(tools or []))
-    resp = await acompletion(**kwargs)
-    return resp
+    logger.debug(
+        "llm.call",
+        model=resolved.model_id,
+        provider=resolved.provider_key,
+        source=resolved.source,
+        n_messages=len(messages),
+        n_tools=len(tools or []),
+    )
+    return await acompletion(**kwargs)
 
 
 def estimate_cost(response: ModelResponse) -> float:

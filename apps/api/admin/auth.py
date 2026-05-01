@@ -49,3 +49,33 @@ async def current_admin(
 
 
 CurrentAdmin = Annotated[AdminPrincipal, Depends(current_admin)]
+
+
+# -----------------------------------------------------------------------------
+# Super-admin (platform operator)
+# -----------------------------------------------------------------------------
+#
+# Tenant admins can manage their own workspace via `current_admin`. Platform
+# concerns -- swapping LLM providers, rotating master secrets, viewing
+# cross-tenant analytics -- need a higher bar. Mint a JWT with `role:
+# "super_admin"` (using the same ADMIN_JWT_SECRET) and pass it in the same
+# Authorization: Bearer header.
+#
+# Keep this lightweight on purpose. When you adopt Clerk/Supabase Auth for
+# the admin UI, replace this with a Clerk role check.
+
+SUPER_ADMIN_ROLE = "super_admin"
+
+
+async def current_super_admin(
+    principal: Annotated[AdminPrincipal, Depends(current_admin)],
+) -> AdminPrincipal:
+    if principal.role != SUPER_ADMIN_ROLE:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "super-admin role required",
+        )
+    return principal
+
+
+CurrentSuperAdmin = Annotated[AdminPrincipal, Depends(current_super_admin)]

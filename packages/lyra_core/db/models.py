@@ -243,3 +243,78 @@ class AuditEvent(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     extra: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+# -----------------------------------------------------------------------------
+# LLM provider configuration (super-admin runtime switching)
+# -----------------------------------------------------------------------------
+#
+# Two tables back the multi-model switch panel:
+#
+#   llm_providers          -- one row per *configured* provider (qwen, deepseek,
+#                              openai, ...). Holds the encrypted API key plus
+#                              optional endpoint override and provider-specific
+#                              extra config (e.g. azure deployment_id). Rows
+#                              only exist for providers the operator has
+#                              actually set up; the static catalog in
+#                              packages/lyra_core/llm/catalog.py describes
+#                              every provider we *could* use.
+#
+#   llm_model_assignments  -- one row per tier (`primary`, `cheap`, ...) saying
+#                              which provider+model is currently active. The
+#                              router reads this on every chat() call (with a
+#                              short cache) so flipping a model in the admin UI
+#                              propagates within ~30s without a redeploy.
+
+
+class LlmProvider(Base):
+    """Per-vendor credentials configured by the platform super-admin.
+
+    `provider_key` matches a key in `lyra_core.llm.catalog.PROVIDERS`. The
+    catalog supplies the LiteLLM model id format and default endpoint; this
+    row supplies the secrets and any per-deployment overrides.
+
+    `api_key_encrypted` is encrypted via `common.crypto.encrypt_platform`
+    (not per-tenant -- these are platform-level secrets). Never read this
+    column directly outside `lyra_core.llm.router`.
+    """
+
+    __tablename__ = "llm_providers"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    provider_key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_base: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+    updated_by_email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
+class LlmModelAssignment(Base):
+    """Which provider+model is currently active for each tier.
+
+    Singleton-per-tier (unique on `tier`). Tiers used today: `primary`,
+    `cheap`, `embedding`. New tiers are just new rows -- no schema change.
+    """
+
+    __tablename__ = "llm_model_assignments"
+    __table_args__ = (UniqueConstraint("tier", name="uq_llm_assignment_tier"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tier: Mapped[str] = mapped_column(String(32), index=True)
+    provider_key: Mapped[str] = mapped_column(String(32), index=True)
+    model_id: Mapped[str] = mapped_column(String(128))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+    updated_by_email: Mapped[str | None] = mapped_column(String(256), nullable=True)

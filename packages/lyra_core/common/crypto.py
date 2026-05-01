@@ -53,3 +53,29 @@ def reencrypt_with_rotation(tenant_id: str, ciphertext: str, old_master: bytes) 
     rotated = MultiFernet([new_fernet, old_fernet])
     plaintext = rotated.decrypt(ciphertext.encode("utf-8"))
     return new_fernet.encrypt(plaintext).decode("utf-8")
+
+
+# -----------------------------------------------------------------------------
+# Platform-level crypto (no tenant)
+# -----------------------------------------------------------------------------
+#
+# Used for secrets that belong to the *platform* rather than a specific
+# customer tenant -- LLM provider API keys live here. We reuse the same
+# HKDF derivation pattern (so the master key never touches secrets directly)
+# but with a fixed pseudo-tenant id, which gives us:
+#
+#   - one consistent encryption scheme across all stored secrets
+#   - master-key rotation works the same way as for tenants
+#   - a leaked tenant key still can't decrypt platform secrets
+
+_PLATFORM_KEY_SCOPE = "_platform_"
+
+
+def encrypt_platform(plaintext: str) -> str:
+    """Encrypt a platform-level secret (e.g. an LLM provider API key)."""
+    return encrypt_for_tenant(_PLATFORM_KEY_SCOPE, plaintext)
+
+
+def decrypt_platform(ciphertext: str) -> str:
+    """Decrypt a platform-level secret encrypted via `encrypt_platform`."""
+    return decrypt_for_tenant(_PLATFORM_KEY_SCOPE, ciphertext)
