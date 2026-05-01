@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from ..common.config import get_settings
 
@@ -17,11 +18,20 @@ _settings = get_settings()
 # clients via the pooler, and you get DuplicatePreparedStatementError on
 # random queries. Switch to session-mode pooler (port 5432) if you ever need
 # prepared-statement performance back.
+#
+# `poolclass=NullPool`: required because the Celery worker creates a fresh
+# asyncio event loop per task (`asyncio.run(_run(...))` in run_agent.py).
+# asyncpg connections are bound to the loop they were opened on -- a pooled
+# connection from a previous, now-closed loop will raise
+# "Event loop is closed" / "Future attached to a different loop" the next
+# time SQLAlchemy hands it out. NullPool opens one connection per checkout
+# and closes it on return, so each task gets a connection scoped to its
+# own loop. The API process (single uvicorn loop) gives up some pooling
+# perf, but Supabase's pgbouncer (port 6543) is pooling underneath us
+# anyway, so the real cost is a few ms per request.
 engine = create_async_engine(
     _settings.database_url,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    poolclass=NullPool,
     echo=False,
     connect_args={"statement_cache_size": 0},
 )

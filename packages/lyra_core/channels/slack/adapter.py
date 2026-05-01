@@ -55,7 +55,15 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
         app = AsyncApp(
             signing_secret=settings.slack_signing_secret,
             oauth_settings=oauth_settings,
-            process_before_response=True,
+            # process_before_response=False (default) is correct for Cloud Run /
+            # any long-running ASGI server: Bolt acks Slack within ~50ms and
+            # runs handlers in a background asyncio task. With True, every
+            # event waited for `authorize` (DB lookup + token refresh) +
+            # handler before responding -- our /slack/events latency was
+            # ~2.4s on Cloud Run, dangerously close to Slack's 3s retry
+            # threshold, which produced a retry storm of duplicate run_agent
+            # tasks for a single user message.
+            process_before_response=False,
         )
     else:
         log.warning(
@@ -65,8 +73,33 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
         app = AsyncApp(
             signing_secret=settings.slack_signing_secret or "missing",
             token="xoxb-missing",
-            process_before_response=True,
+            process_before_response=False,
         )
+
+    @app.middleware
+    async def _drop_slack_retries(request, next_):  # type: ignore[no-untyped-def]  # noqa: ANN001
+        """Short-circuit Slack's automatic event retries.
+
+        Slack retries an event up to 3x if it doesn't see a 2xx within 3s.
+        Even with process_before_response=False we still get retries when
+        Cloud Run cold-starts or under transient slowness. Without
+        deduplication, every retry enqueues another `run_agent` task for
+        the same user message -- that's why we previously saw 4 task IDs
+        for a single DM, all replying into the same Slack thread.
+        Acking 200 here on retry headers tells Slack we got it, and we
+        don't kick off duplicate work.
+        """
+        retry_num = request.headers.get("x-slack-retry-num")
+        if retry_num:
+            log.info(
+                "slack.retry.skipped",
+                retry_num=retry_num if isinstance(retry_num, str) else retry_num[0],
+                reason=request.headers.get("x-slack-retry-reason"),
+            )
+            # Returning without calling next_() ends the middleware chain;
+            # Bolt's outer handler responds 200 OK.
+            return
+        await next_()
 
     @app.event("app_mention")
     async def on_mention(body: dict[str, Any], ack: Any, say: Any) -> None:
@@ -153,19 +186,43 @@ async def _disable_workspace(team_id: str | None) -> None:
 
 
 async def _enqueue_from_event(body: dict[str, Any]) -> None:
-    """Translate a Slack event into InboundMessage + dispatch to Celery."""
+    """Translate a Slack event into InboundMessage + dispatch to Celery.
+
+    Threading rules (so the DM UX stays linear and channel mentions stay tidy):
+      - DM, top-level message  -> reply as a new top-level message (no thread_ts).
+      - DM, reply inside thread -> reply in that same thread.
+      - Channel @-mention top-level -> reply threaded on the user's message.
+      - Channel reply inside thread -> reply in that same thread.
+
+    The agent's checkpointer key (`thread_id`) is independent: we use
+    thread_ts when present, else the message ts, so each new top-level
+    user message starts a fresh agent conversation rather than leaking
+    state from the previous one.
+    """
     from apps.worker.tasks.run_agent import run_agent  # noqa: PLC0415
 
     event = body.get("event") or {}
+    is_dm = event.get("channel_type") == "im"
+    slack_thread_ts: str | None = event.get("thread_ts")
+    slack_msg_ts: str | None = event.get("ts")
+
+    if slack_thread_ts:
+        reply_thread_ts: str | None = slack_thread_ts
+    elif is_dm:
+        reply_thread_ts = None
+    else:
+        reply_thread_ts = slack_msg_ts
+
     msg = InboundMessage(
         surface=Surface.SLACK,
         tenant_external_id=body.get("team_id") or body.get("api_app_id") or "",
         channel_id=event.get("channel", ""),
-        thread_id=event.get("thread_ts") or event.get("ts") or "",
+        thread_id=slack_thread_ts or slack_msg_ts or "",
         user_id=event.get("user", ""),
         text=(event.get("text") or "").strip(),
         files=event.get("files", []),
-        parent_message_ts=event.get("thread_ts"),
+        reply_thread_ts=reply_thread_ts,
+        is_dm=is_dm,
         raw=body,
     )
     if not msg.text:
@@ -174,6 +231,8 @@ async def _enqueue_from_event(body: dict[str, Any]) -> None:
         "slack.event.enqueue",
         tenant=msg.tenant_external_id,
         thread=msg.thread_id,
+        reply_thread=reply_thread_ts or "(top-level)",
+        is_dm=is_dm,
         text_len=len(msg.text),
     )
     run_agent.delay(message_json=msg.model_dump_json())

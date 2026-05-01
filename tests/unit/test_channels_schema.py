@@ -79,17 +79,29 @@ class TestArtifact:
 
 class TestOutboundReply:
     def test_minimal_valid(self) -> None:
-        r = OutboundReply(thread_id="t", channel_id="c")
+        r = OutboundReply(channel_id="c")
         assert r.text is None
         assert r.blocks is None
+        assert r.thread_ts is None
         assert r.artifacts == []
         assert r.requires_approval is False
+
+    def test_top_level_default(self) -> None:
+        # No thread_ts means the bot replies as a new top-level message
+        # (the natural UX for DMs and avoids the "all replies appear under
+        # the user's first message" bug we hit in production).
+        r = OutboundReply(text="hi", channel_id="c")
+        assert r.thread_ts is None
+
+    def test_threaded_reply(self) -> None:
+        r = OutboundReply(text="ok", channel_id="c", thread_ts="123.456")
+        assert r.thread_ts == "123.456"
 
     def test_with_artifacts(self) -> None:
         r = OutboundReply(
             text="here you go",
-            thread_id="t",
             channel_id="c",
+            thread_ts="t",
             artifacts=[Artifact(kind="pdf", filename="r.pdf", content=b"%PDF")],
         )
         assert len(r.artifacts) == 1
@@ -97,8 +109,8 @@ class TestOutboundReply:
 
     def test_approval_payload_optional(self) -> None:
         r = OutboundReply(
-            thread_id="t",
             channel_id="c",
+            thread_ts="t",
             requires_approval=True,
             approval_payload={"job_id": "j-1"},
         )

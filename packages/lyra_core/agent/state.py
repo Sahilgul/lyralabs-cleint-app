@@ -52,6 +52,11 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     user_id: str
     user_request: str
+    # The Slack `thread_ts` to post replies into. None = post replies as
+    # new top-level messages in the channel/DM. Computed by the channel
+    # adapter based on whether the user threaded their message and whether
+    # the surface is a DM. See lyra_core.channels.slack.adapter.
+    reply_thread_ts: str | None
 
     # --- working state ---
     classification: Literal["smalltalk", "task", "clarification"]

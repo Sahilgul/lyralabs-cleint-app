@@ -30,8 +30,8 @@ async def smalltalk_reply_node(state: AgentState) -> dict[str, Any]:
         state["tenant_id"],
         OutboundReply(
             text=text,
-            thread_id=state["thread_id"],
             channel_id=state["channel_id"],
+            thread_ts=state.get("reply_thread_ts"),
         ),
     )
     return {"final_summary": text}

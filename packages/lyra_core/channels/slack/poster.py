@@ -30,13 +30,21 @@ async def _bot_token_for(tenant_id: str) -> str:
 
 
 async def post_reply(tenant_id: str, reply: OutboundReply) -> str:
-    """Post text/blocks to a thread and upload any artifacts. Returns parent ts."""
+    """Post text/blocks to a channel/thread and upload any artifacts.
+
+    `reply.thread_ts` controls threading: when set, the message becomes a
+    threaded reply on that ts; when None, it goes to the channel/DM as a
+    new top-level message. This is what keeps DM conversations from
+    collapsing into a single thread on the user's first message.
+
+    Returns the ts of the posted message.
+    """
     token = await _bot_token_for(tenant_id)
     client = AsyncWebClient(token=token)
 
     resp = await client.chat_postMessage(
         channel=reply.channel_id,
-        thread_ts=reply.thread_id,
+        thread_ts=reply.thread_ts,
         text=reply.text or " ",
         blocks=reply.blocks or None,
     )
@@ -45,7 +53,7 @@ async def post_reply(tenant_id: str, reply: OutboundReply) -> str:
     for art in reply.artifacts:
         await client.files_upload_v2(
             channel=reply.channel_id,
-            thread_ts=reply.thread_id,
+            thread_ts=reply.thread_ts,
             content=art.content,
             filename=art.filename,
             title=art.description or art.filename,
@@ -55,7 +63,7 @@ async def post_reply(tenant_id: str, reply: OutboundReply) -> str:
         "slack.reply.posted",
         tenant=tenant_id,
         channel=reply.channel_id,
-        thread=reply.thread_id,
+        thread_ts=reply.thread_ts or "(top-level)",
         n_artifacts=len(reply.artifacts),
     )
     return parent_ts

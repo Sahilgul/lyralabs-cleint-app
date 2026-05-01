@@ -104,6 +104,103 @@ async def test_enqueue_falls_back_thread_ts_to_ts(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enqueue_dm_top_level_does_not_thread_reply() -> None:
+    """User DMs ARLO with a fresh top-level message: bot must reply in the
+    main DM (reply_thread_ts=None), not as a thread on the user's message.
+    Threading every DM reply is what made every bot response appear nested
+    under the user's first message.
+    """
+    import json
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "D-dm",
+                    "channel_type": "im",
+                    "user": "U",
+                    "text": "hello",
+                    "ts": "9999.0000",
+                },
+            }
+        )
+
+    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    assert payload["is_dm"] is True
+    assert payload["reply_thread_ts"] is None
+    assert payload["thread_id"] == "9999.0000"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_dm_inside_thread_keeps_thread_reply() -> None:
+    """If the user explicitly threaded their DM reply, mirror that and
+    reply in the same thread.
+    """
+    import json
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "D-dm",
+                    "channel_type": "im",
+                    "thread_ts": "1111.1111",
+                    "user": "U",
+                    "text": "follow-up in thread",
+                    "ts": "2222.2222",
+                },
+            }
+        )
+
+    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    assert payload["is_dm"] is True
+    assert payload["reply_thread_ts"] == "1111.1111"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_channel_mention_threads_on_user_message() -> None:
+    """Channel @-mentions should still get threaded responses so the
+    channel doesn't get noisy with bot replies.
+    """
+    import json
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "user": "U",
+                    "text": "<@bot> status",
+                    "ts": "3333.3333",
+                },
+            }
+        )
+
+    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    assert payload["is_dm"] is False
+    assert payload["reply_thread_ts"] == "3333.3333"
+
+
+@pytest.mark.asyncio
 async def test_disable_workspace_marks_tenant_cancelled(monkeypatch) -> None:
     """`_disable_workspace` must clear bot tokens + cancel the tenant."""
     from lyra_core.db.models import SlackInstallation, Tenant

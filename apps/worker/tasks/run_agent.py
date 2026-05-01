@@ -67,7 +67,9 @@ async def _run(message_json: str) -> dict:
             thread_id=f"{msg.surface}:{msg.channel_id}:{msg.thread_id}",
             user_id=msg.user_id,
             channel_id=msg.channel_id,
-            parent_message_ts=msg.parent_message_ts,
+            # Stored for audit/debug only -- mirror the Slack thread_ts the
+            # bot will reply into (None for top-level DMs / channel posts).
+            parent_message_ts=msg.reply_thread_ts,
             user_request=msg.text,
             status="running",
         )
@@ -82,6 +84,7 @@ async def _run(message_json: str) -> dict:
         "job_id": job_id,
         "channel_id": msg.channel_id,
         "thread_id": msg.thread_id,
+        "reply_thread_ts": msg.reply_thread_ts,
         "user_id": msg.user_id,
         "user_request": msg.text,
         "step_results": [],

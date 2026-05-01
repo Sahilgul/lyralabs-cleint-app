@@ -78,8 +78,8 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
     reply = OutboundReply(
         text=f"Plan ready for approval (goal: {plan.goal})",
         blocks=blocks,
-        thread_id=state["thread_id"],
         channel_id=state["channel_id"],
+        thread_ts=state.get("reply_thread_ts"),
         requires_approval=True,
     )
     await post_reply(state["tenant_id"], reply)
@@ -103,8 +103,8 @@ def route_after_approval(state: AgentState) -> Literal["executor", "rejected_rep
 async def rejected_reply_node(state: AgentState) -> dict[str, Any]:
     reply = OutboundReply(
         text="Got it - rejected. I won't do anything. Tell me what to change.",
-        thread_id=state["thread_id"],
         channel_id=state["channel_id"],
+        thread_ts=state.get("reply_thread_ts"),
     )
     await post_reply(state["tenant_id"], reply)
     return {"final_summary": "rejected_by_user"}

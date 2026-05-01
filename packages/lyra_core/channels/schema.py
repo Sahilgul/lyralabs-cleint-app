@@ -24,12 +24,27 @@ class InboundMessage(BaseModel):
     surface: Surface
     tenant_external_id: str = Field(description="Slack team_id or Teams tenant id")
     channel_id: str
-    thread_id: str = Field(description="Slack thread_ts or Teams conversation id")
+    thread_id: str = Field(
+        description=(
+            "Conversation key for the agent's checkpointer. Slack: thread_ts or "
+            "the message ts (so each new top-level message starts a fresh agent "
+            "conversation). NOT the same as `reply_thread_ts`."
+        )
+    )
     user_id: str = Field(description="Platform user id")
     user_display_name: str | None = None
     text: str
     files: list[dict[str, Any]] = Field(default_factory=list)
-    parent_message_ts: str | None = None
+    reply_thread_ts: str | None = Field(
+        default=None,
+        description=(
+            "The Slack `thread_ts` to post the bot's reply into. None means "
+            "post the reply as a new top-level message in the channel/DM. "
+            "Computed by the channel adapter so reply UX is correct: top-level "
+            "DMs stay linear, channel @-mentions get threaded."
+        ),
+    )
+    is_dm: bool = False
     raw: dict[str, Any] = Field(default_factory=dict, description="Original platform payload")
 
 
@@ -45,8 +60,15 @@ class OutboundReply(BaseModel):
 
     text: str | None = None
     blocks: list[dict[str, Any]] | None = None
-    thread_id: str
     channel_id: str
+    thread_ts: str | None = Field(
+        default=None,
+        description=(
+            "Slack thread_ts to reply into. None = post as a new top-level "
+            "message in the channel/DM. Plumbed straight from "
+            "InboundMessage.reply_thread_ts."
+        ),
+    )
     artifacts: list[Artifact] = Field(default_factory=list)
     requires_approval: bool = False
     approval_payload: dict[str, Any] | None = None

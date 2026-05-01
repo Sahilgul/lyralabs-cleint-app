@@ -82,8 +82,8 @@ async def critic_node(state: AgentState) -> dict[str, Any]:
 
     reply = OutboundReply(
         text=summary,
-        thread_id=state["thread_id"],
         channel_id=state["channel_id"],
+        thread_ts=state.get("reply_thread_ts"),
         artifacts=artifacts,
     )
     await post_reply(state["tenant_id"], reply)
