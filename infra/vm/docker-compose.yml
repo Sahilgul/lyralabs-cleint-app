@@ -1,0 +1,77 @@
+# lyralabs-worker VM stack — Redis + Celery worker on a single GCE e2-small.
+#
+# Layout:
+#   - redis  : self-hosted, AUTH-protected, AOF persistence, no public binding
+#              (only the worker connects via the docker network; the Cloud Run
+#              API connects via the VM's *external* IP on port 6379).
+#   - worker : Celery worker pulling from the same image the API uses, with
+#              the runtime CMD overridden to run celery instead of uvicorn.
+#
+# Why this shape:
+#   - "restart: always" replaces the systemd-style supervisor we'd otherwise
+#     need. Docker handles crash recovery.
+#   - The redis service binds to all interfaces (0.0.0.0) by default inside
+#     its container; the GCE firewall is what actually controls who can reach
+#     port 6379 from outside (allow only Cloud Run egress, see infra/vm/README.md).
+#   - Worker reaches redis via the docker-compose service name `redis`,
+#     which resolves to the redis container's internal IP. Sub-ms latency.
+#   - The Cloud Run API reaches redis via the VM's external IP; the same
+#     password authenticates both flows (REDIS_PASSWORD is shared).
+#
+# Env-driven: every secret/url comes from /opt/lyralabs/.env on the VM.
+# See infra/vm/.env.example for the required vars.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: lyralabs-redis
+    restart: always
+    ports:
+      # Bind to the VM's external interface so the Cloud Run API can connect.
+      # (For VPC-private redis, change this to "127.0.0.1:6379:6379" and add
+      #  a VPC Connector — see infra/vm/README.md "private networking".)
+      - "6379:6379"
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    # Pulled from your Cloud Build → Artifact Registry pipeline. The IMAGE
+    # var in /opt/lyralabs/.env points to the same image lyralabs-app uses.
+    # Change this when Cloud Build builds a new tag (Phase 6 auto-deploy).
+    image: ${WORKER_IMAGE}
+    container_name: lyralabs-worker
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    # Override the Dockerfile's `CMD exec uvicorn ...` with celery worker.
+    command:
+      - celery
+      - -A
+      - apps.worker.celery_app:celery
+      - worker
+      - -Q
+      - agent
+      - --concurrency=4
+      - --loglevel=INFO
+
+volumes:
+  redis_data:

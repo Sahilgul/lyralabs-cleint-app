@@ -483,18 +483,18 @@ make test-coverage                # with coverage report
 
 ## Deployment
 
-Two Cloud Run services from this repo (one shared `Dockerfile`, different runtime command — see [`infra/cloud-run/README.md`](infra/cloud-run/README.md) for the full setup guide), plus a third from the UI repo:
+Hybrid topology: the API runs on Cloud Run (HTTP-shaped, scale-to-N), the worker runs on a single Compute Engine VM alongside its own Redis broker (pull-based, always-on, cheaper than Cloud Run for sustained polling). Same `Dockerfile` for both — only the runtime command differs.
 
-| Service          | Repo                | Image source                                                       | Notes                                                                |
-| ---------------- | ------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `api`            | this repo           | `./Dockerfile` (default `CMD` runs uvicorn)                        | Min instances ≥ 1 to keep Slack response times under 3s.             |
-| `worker`         | this repo           | `./Dockerfile` (`command`/`args` overridden to run `celery`)       | `cpu-throttling: false` is critical — Celery polls Redis between requests. Concurrency 4 prefork tasks per instance. |
-| `admin-ui`       | `lyralabs-admin-ui` | `Dockerfile` (Node build → Nginx)                                  | Static SPA, scale-to-zero. Origin must be in `ADMIN_BASE_URL` here.  |
+| Service          | Repo                | Where it runs                                       | Image source                                                       | Notes                                                                |
+| ---------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `api`            | this repo           | Cloud Run (`lyralabs-app`)                          | `./Dockerfile` (default `CMD` runs uvicorn)                        | Min instances ≥ 1 to keep Slack response times under 3s. See [`infra/cloud-run/README.md`](infra/cloud-run/README.md). |
+| `worker` + `redis` | this repo         | GCE VM (`lyralabs-worker`, `e2-small`, ~$13/mo)     | `./Dockerfile` (`command` overridden to `celery worker`)           | `docker-compose` runs Celery + Redis side-by-side. Static IP for the API to reach. See [`infra/vm/README.md`](infra/vm/README.md). |
+| `admin-ui`       | `lyralabs-admin-ui` | Vercel                                              | `Dockerfile` (Node build → Nginx)                                  | Static SPA, scale-to-zero. Origin must be in `ADMIN_BASE_URL` here.  |
 
 Managed dependencies:
 
 - **Postgres** → Supabase (Pro tier, daily backups, PITR).
-- **Redis** → Upstash (single-region; switch to Memorystore for higher SLAs).
+- **Redis** → self-hosted on the worker VM (AOF persistence, AUTH password). Migrate to Upstash/Memorystore if reliability SLAs ever justify it.
 - **Qdrant** → Qdrant Cloud or a small Compute Engine VM.
 - **Stripe** → live mode + webhook to `https://api.your-domain/webhooks/stripe`.
 
