@@ -69,6 +69,13 @@ class OutboundReply(BaseModel):
             "InboundMessage.reply_thread_ts."
         ),
     )
+    assistant_status_thread_ts: str | None = Field(
+        default=None,
+        description=(
+            "Slack assistant thread whose loading/status indicator should be "
+            "cleared after posting. May differ from thread_ts for top-level DMs."
+        ),
+    )
     artifacts: list[Artifact] = Field(default_factory=list)
     requires_approval: bool = False
     approval_payload: dict[str, Any] | None = None

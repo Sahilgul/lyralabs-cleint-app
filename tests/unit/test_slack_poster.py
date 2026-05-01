@@ -95,6 +95,42 @@ async def test_post_reply_sends_message_and_uploads_artifacts(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_post_reply_clears_assistant_status(monkeypatch) -> None:
+    monkeypatch.setattr(poster_mod, "_bot_token_for", AsyncMock(return_value="xoxb-test"))
+
+    fake_post = AsyncMock(return_value={"ts": "1.0"})
+    fake_clear = AsyncMock(return_value={"ok": True})
+
+    class FakeWebClient:
+        def __init__(self, *_a, **_kw) -> None:
+            pass
+
+        chat_postMessage = fake_post
+        assistant_threads_setStatus = fake_clear
+
+        async def files_upload_v2(self, **kw):
+            return {"ok": True}
+
+    monkeypatch.setattr(poster_mod, "AsyncWebClient", FakeWebClient)
+
+    await poster_mod.post_reply(
+        "tenant-1",
+        OutboundReply(
+            text="hi",
+            channel_id="D-dm",
+            thread_ts=None,
+            assistant_status_thread_ts="user-msg-ts",
+        ),
+    )
+
+    fake_clear.assert_awaited_once_with(
+        channel_id="D-dm",
+        thread_ts="user-msg-ts",
+        status="",
+    )
+
+
+@pytest.mark.asyncio
 async def test_post_reply_sends_blocks_when_provided(monkeypatch) -> None:
     monkeypatch.setattr(poster_mod, "_bot_token_for", AsyncMock(return_value="xoxb-test"))
 

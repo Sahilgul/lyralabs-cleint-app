@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 from sqlalchemy import select
 
@@ -58,6 +59,19 @@ async def post_reply(tenant_id: str, reply: OutboundReply) -> str:
             filename=art.filename,
             title=art.description or art.filename,
         )
+
+    if reply.assistant_status_thread_ts:
+        try:
+            await client.assistant_threads_setStatus(
+                channel_id=reply.channel_id,
+                thread_ts=reply.assistant_status_thread_ts,
+                status="",
+            )
+        except SlackApiError as e:
+            log.info(
+                "slack.indicator.clear_skipped",
+                error=getattr(e.response, "data", {}).get("error", str(e)),
+            )
 
     log.info(
         "slack.reply.posted",

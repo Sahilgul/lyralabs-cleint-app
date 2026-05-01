@@ -16,7 +16,7 @@ from apps.worker.tasks.run_agent import (
 )
 
 
-def _make_msg(text: str = "do x") -> str:
+def _make_msg(text: str = "do x", *, is_dm: bool = False) -> str:
     return InboundMessage(
         surface=Surface.SLACK,
         tenant_external_id="T-XYZ",
@@ -24,6 +24,7 @@ def _make_msg(text: str = "do x") -> str:
         thread_id="thr-1",
         user_id="U1",
         text=text,
+        is_dm=is_dm,
     ).model_dump_json()
 
 
@@ -137,6 +138,36 @@ async def test_run_happy_path_invokes_graph(monkeypatch) -> None:
     assert job_row.result_summary == "All done"
     assert job_row.cost_usd == pytest.approx(0.012)
     assert job_state.get("committed") is True
+    initial_state = fake_graph.ainvoke.await_args.args[0]
+    assert initial_state["assistant_status_thread_ts"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_dm_preserves_assistant_status_thread(monkeypatch) -> None:
+    job_row = Job(
+        tenant_id="tenant-1", thread_id="t", user_id="u", user_request="x", status="running"
+    )
+    job_row.id = "job-uuid-1"
+    sessions = [_FakeSession(tenant=_tenant()), _FakeSession(job=job_row)]
+    _patch_session_chain(monkeypatch, sessions)
+
+    class FakeSaver:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
+
+    fake_graph = MagicMock()
+    fake_graph.ainvoke = AsyncMock(return_value={"final_summary": "ok", "total_cost_usd": 0})
+    monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
+
+    await _run(_make_msg("hello", is_dm=True))
+
+    initial_state = fake_graph.ainvoke.await_args.args[0]
+    assert initial_state["assistant_status_thread_ts"] == "thr-1"
 
 
 @pytest.mark.asyncio

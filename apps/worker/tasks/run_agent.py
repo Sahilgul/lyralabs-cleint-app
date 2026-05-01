@@ -84,6 +84,7 @@ async def _run(message_json: str) -> dict:
         "channel_id": msg.channel_id,
         "thread_id": msg.thread_id,
         "reply_thread_ts": msg.reply_thread_ts,
+        "assistant_status_thread_ts": msg.thread_id if msg.is_dm else None,
         "user_id": msg.user_id,
         "user_request": msg.text,
         "step_results": [],
