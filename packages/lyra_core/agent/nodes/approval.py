@@ -58,25 +58,12 @@ def _plan_preview_blocks(plan: Plan, job_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def route_after_plan(state: AgentState) -> Literal["approval", "executor", "smalltalk_reply"]:
-    plan_dict = state.get("plan")
-    if not plan_dict:
-        return "smalltalk_reply"
-    plan = Plan.model_validate(plan_dict)
-    if plan.needs_clarification:
-        return "smalltalk_reply"
-    if any(step.requires_approval for step in plan.steps):
-        return "approval"
-    return "executor"
-
-
 async def approval_node(state: AgentState) -> dict[str, Any]:
     """Post a preview to Slack, then interrupt the graph.
 
-    Reads from `pending_plan` (unified mode, set by `submit_plan_for_approval`)
-    or `plan` (legacy mode, set by planner_node). On approval the pending
-    plan is promoted to `plan` so the executor reads a uniform field
-    regardless of which graph produced it.
+    `agent_node` sets `pending_plan` via the `submit_plan_for_approval`
+    meta-tool. On approval we promote it to `plan` so the executor reads
+    a single canonical field.
     """
     plan_dict = state.get("pending_plan") or state.get("plan")
     plan = Plan.model_validate(plan_dict)
@@ -87,6 +74,7 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
         blocks=blocks,
         channel_id=state["channel_id"],
         thread_ts=state.get("reply_thread_ts"),
+        assistant_status_thread_ts=state.get("assistant_status_thread_ts"),
         requires_approval=True,
     )
     await post_reply(state["tenant_id"], reply)
@@ -102,8 +90,7 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "approval_decision": decision,
-        # Promote pending_plan -> plan so the executor sees the same
-        # `state["plan"]` shape as the legacy graph.
+        # Promote pending_plan -> plan so the executor reads a single canonical field.
         "plan": plan_dict,
         "pending_plan": None,
     }
@@ -118,6 +105,7 @@ async def rejected_reply_node(state: AgentState) -> dict[str, Any]:
         text="Got it - rejected. I won't do anything. Tell me what to change.",
         channel_id=state["channel_id"],
         thread_ts=state.get("reply_thread_ts"),
+        assistant_status_thread_ts=state.get("assistant_status_thread_ts"),
     )
     await post_reply(state["tenant_id"], reply)
     return {"final_summary": "rejected_by_user"}

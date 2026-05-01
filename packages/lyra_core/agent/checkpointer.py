@@ -7,7 +7,7 @@ and resume hours later.
 The connection pool is process-scoped: opened lazily on first use, kept
 warm for the lifetime of the worker process. Per-task pool open/close
 costs ~1-1.5s of TLS handshake to Supabase Tokyo from us-east1, so a
-shared pool is the difference between a 5s smalltalk reply and a 7s one.
+shared pool is the difference between a 5s direct reply and a 7s one.
 """
 
 from __future__ import annotations

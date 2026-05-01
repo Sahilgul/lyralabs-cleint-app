@@ -6,7 +6,7 @@ In Slack, mention the bot:
 
 > @ARLO hello
 
-Expected: friendly smalltalk reply within 5 seconds. Job appears in `/admin/jobs` with status=done.
+Expected: friendly direct reply from the `agent` node within 5 seconds (no tool calls). Job appears in `/admin/jobs` with status=done.
 
 ---
 

@@ -1,7 +1,6 @@
 """Unified tool-using agent node.
 
-A single LLM call replaces the legacy classifier->planner->smalltalk graph.
-The model decides per turn whether to:
+A single LLM call drives every turn. The model decides whether to:
 
   1. Reply directly  -- no tool calls. We post the text to Slack and end.
   2. Call a read-only tool  -- routed to `tool_node`, which executes and
@@ -18,7 +17,8 @@ separate approval clicks per multi-step job -- both worse UX and a
 security regression vs. legacy.
 
 The hard guardrail lives in `tool_node`: any write tool (requires_approval=True)
-called outside the plan path is rejected with a ToolError. The system
+called outside the plan path is rejected with a ToolError, preventing
+the model from sneaking writes past the human approval gate. The system
 prompt also instructs the model to never call write tools directly.
 """
 
@@ -225,6 +225,7 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
                 text=text,
                 channel_id=state["channel_id"],
                 thread_ts=state.get("reply_thread_ts"),
+                assistant_status_thread_ts=state.get("assistant_status_thread_ts"),
             ),
         )
     return {**base_update, "final_summary": text}

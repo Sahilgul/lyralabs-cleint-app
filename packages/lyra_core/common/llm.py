@@ -1,8 +1,8 @@
 """LLM call surface, multi-provider via LiteLLM.
 
 Two tiers (callers pick one):
-  - PRIMARY: planner, executor reasoning, critic-on-error.
-  - CHEAP:   classifier, smalltalk, cheap-pass critic.
+  - PRIMARY: agent reasoning, critic, executor reasoning.
+  - CHEAP:   reserved for cheap helper calls (e.g. cheap-pass critic).
 
 Per-tier model + credentials are resolved at call time by
 `lyra_core.llm.router.resolve(tier)`. The router reads the active

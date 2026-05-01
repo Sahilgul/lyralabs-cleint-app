@@ -168,10 +168,7 @@ def patch_chat(monkeypatch, mock_litellm_response):
     monkeypatch.setattr(llm, "chat", mock)
     # Also patch wherever the import has been already bound in node modules.
     for mod_name in [
-        "lyra_core.agent.nodes.classifier",
-        "lyra_core.agent.nodes.planner",
         "lyra_core.agent.nodes.critic",
-        "lyra_core.agent.nodes.smalltalk",
         "lyra_core.agent.nodes.agent",
     ]:
         mod = sys.modules.get(mod_name)

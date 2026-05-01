@@ -11,7 +11,6 @@ from lyra_core.agent.nodes.approval import (
     approval_node,
     rejected_reply_node,
     route_after_approval,
-    route_after_plan,
 )
 from lyra_core.agent.state import Plan, PlanStep
 
@@ -30,23 +29,6 @@ def _plan(*, has_write: bool = False, needs_clarification: bool = False) -> Plan
         ] if has_write else [PlanStep(id="s1", tool_name="t", rationale="r")],
         needs_clarification=needs_clarification,
     )
-
-
-class TestRouteAfterPlan:
-    def test_no_plan_goes_to_smalltalk(self) -> None:
-        assert route_after_plan({}) == "smalltalk_reply"  # type: ignore[arg-type]
-
-    def test_clarification_goes_to_smalltalk(self) -> None:
-        p = _plan(needs_clarification=True)
-        assert route_after_plan({"plan": p.model_dump()}) == "smalltalk_reply"  # type: ignore[arg-type]
-
-    def test_write_steps_route_to_approval(self) -> None:
-        p = _plan(has_write=True)
-        assert route_after_plan({"plan": p.model_dump()}) == "approval"  # type: ignore[arg-type]
-
-    def test_read_only_routes_to_executor(self) -> None:
-        p = _plan(has_write=False)
-        assert route_after_plan({"plan": p.model_dump()}) == "executor"  # type: ignore[arg-type]
 
 
 class TestRouteAfterApproval:

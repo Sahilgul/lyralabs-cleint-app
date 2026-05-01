@@ -94,8 +94,8 @@ class TestAgentState:
             "thread_id": "thr",
             "user_id": "u",
             "user_request": "do x",
-            "classification": "task",
             "plan": {"goal": "g", "steps": []},
+            "pending_plan": None,
             "step_results": [],
             "approval_decision": "pending",
             "final_summary": None,
@@ -104,4 +104,4 @@ class TestAgentState:
             "total_cost_usd": 0.0,
             "messages": [],
         }
-        assert s["classification"] == "task"
+        assert s["plan"]["goal"] == "g"

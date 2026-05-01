@@ -12,7 +12,7 @@ list and any provider-specific kwargs.
 
 Tier hints:
   - "primary": meant for planning/critic/executor reasoning.
-  - "cheap":   meant for classifier/smalltalk/cheap-pass critic.
+  - "cheap":   meant for cheap helper calls (e.g. cheap-pass critic).
   - "both":    fine for either; admin picks.
   - "embedding": embedding model only (do not assign to chat tiers).
 """
@@ -99,7 +99,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
                 "Qwen Turbo",
                 8192,
                 "cheap",
-                "Fastest + cheapest, classifier-grade.",
+                "Fastest + cheapest tier.",
             ),
         ],
     ),
