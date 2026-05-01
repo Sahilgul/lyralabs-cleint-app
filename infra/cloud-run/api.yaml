@@ -1,3 +1,23 @@
+# lyralabs-api — Cloud Run service definition (reference + applyable).
+#
+# Currently deployed as `lyralabs-app` (legacy name from initial deploy);
+# Sprint 2 renames it to `lyralabs-api` to match this manifest.
+#
+# Two ways this file gets used — see the matching note in worker.yaml.
+#
+# Why these specific knobs:
+#   - minScale: "1"           → first Slack message of the day must respond
+#                                in <3s, so we keep one instance hot.
+#   - containerConcurrency: 80 → FastAPI is async and most endpoints are
+#                                fast; 80 lets one instance handle bursts of
+#                                Slack webhooks without scaling.
+#   - timeoutSeconds: 60      → API only acks Slack and enqueues; if it
+#                                takes longer something is wrong.
+#   - cpu-throttling: false   → keeps async tasks (e.g. Celery enqueue
+#                                I/O) responsive between requests.
+#   - ingress: all            → must be reachable from Slack/Stripe/Google
+#                                webhooks and the Vercel admin UI.
+
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -15,18 +35,20 @@ spec:
     spec:
       containerConcurrency: 80
       timeoutSeconds: 60
-      serviceAccountName: lyralabs-api@PROJECT_ID.iam.gserviceaccount.com
+      serviceAccountName: PLACEHOLDER_SA@PLACEHOLDER_PROJECT.iam.gserviceaccount.com
       containers:
-        - image: REGION-docker.pkg.dev/PROJECT_ID/lyralabs/api:GIT_SHA
+        - image: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT/lyralabs/api:PLACEHOLDER_GIT_SHA
+          # Cloud Run injects $PORT=8080; the Dockerfile's default CMD reads
+          # it. No command override needed for the API — uvicorn runs as PID 1.
           ports:
-            - containerPort: 8000
+            - containerPort: 8080
           resources:
             limits:
               cpu: "2"
               memory: 1Gi
-          envFrom:
-            - secretRef:
-                name: lyralabs-env
+          # Env vars are configured via the Cloud Run console ("Variables &
+          # Secrets" tab) until Sprint 2 migrates them to Secret Manager.
+          # See infra/cloud-run/README.md for the full list.
           env:
             - name: APP_ENV
               value: production

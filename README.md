@@ -483,13 +483,13 @@ make test-coverage                # with coverage report
 
 ## Deployment
 
-Two Cloud Run services from this repo (driven by `infra/cloud-run/*.yaml` and the workflows in `infra/github-actions/`), plus a third from the UI repo:
+Two Cloud Run services from this repo (one shared `Dockerfile`, different runtime command — see [`infra/cloud-run/README.md`](infra/cloud-run/README.md) for the full setup guide), plus a third from the UI repo:
 
-| Service          | Repo                | Image source                          | Notes                                                                |
-| ---------------- | ------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| `api`            | this repo           | `./Dockerfile` (repo root)            | Min instances ≥ 1 to keep Slack response times under 3s.             |
-| `worker`         | this repo           | `apps/worker/Dockerfile`              | Concurrency 4–8; CPU always-on for long agent runs.                  |
-| `admin-ui`       | `lyralabs-admin-ui` | `Dockerfile` (Node build → Nginx)     | Static SPA, scale-to-zero. Origin must be in `ADMIN_BASE_URL` here.  |
+| Service          | Repo                | Image source                                                       | Notes                                                                |
+| ---------------- | ------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `api`            | this repo           | `./Dockerfile` (default `CMD` runs uvicorn)                        | Min instances ≥ 1 to keep Slack response times under 3s.             |
+| `worker`         | this repo           | `./Dockerfile` (`command`/`args` overridden to run `celery`)       | `cpu-throttling: false` is critical — Celery polls Redis between requests. Concurrency 4 prefork tasks per instance. |
+| `admin-ui`       | `lyralabs-admin-ui` | `Dockerfile` (Node build → Nginx)                                  | Static SPA, scale-to-zero. Origin must be in `ADMIN_BASE_URL` here.  |
 
 Managed dependencies:
 

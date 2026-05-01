@@ -1,8 +1,42 @@
+# lyralabs-worker — Cloud Run service definition (reference + applyable).
+#
+# Two ways this file gets used:
+#
+#   1. As a visual reference when you set up the service via the GCP Console
+#      ("Cloud Run → Create service → Continuously deploy from a repository").
+#      Copy the values from `spec.template.metadata.annotations` and the
+#      container `command`/`args`/`resources`/`env` into the console wizard.
+#
+#   2. As an applyable manifest:
+#         gcloud run services replace infra/cloud-run/worker.yaml \
+#             --region=us-east1
+#      This requires the placeholders below to be substituted first
+#      (e.g. via `envsubst` or sed), and the image tag to exist in Artifact
+#      Registry. For now the Console flow is simpler — see infra/cloud-run/README.md.
+#
+# Why this is a *Service* and not a *Job*: agent runs are continuous,
+# pull-based work (Celery polls Redis); Cloud Run Jobs are one-shot. Worker
+# Pools (preview) would be the future-perfect resource type — see README.md.
+#
+# Why these specific knobs:
+#   - cpu-throttling: false   → worker has no inbound HTTP, so it MUST keep
+#                                CPU between Celery polls or it freezes.
+#   - minScale: "1"           → keeps one worker hot to avoid 5-15s cold-
+#                                start delay on the first message of the day.
+#   - containerConcurrency: 1 → one Cloud Run "request" per instance; moot
+#                                for the worker (no inbound HTTP) but signals
+#                                to the autoscaler that 1 task = 1 instance.
+#   - timeoutSeconds: 900     → 15-min ceiling per agent run; LangGraph
+#                                checkpoints in Postgres so over-runs resume.
+#   - ingress: internal       → no public traffic; lock the surface down.
+
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
   name: lyralabs-worker
   annotations:
+    # Worker has no public surface — only the API talks to Redis, and Redis
+    # is what the worker polls. No need to expose this service publicly.
     run.googleapis.com/ingress: internal
 spec:
   template:
@@ -10,18 +44,42 @@ spec:
       annotations:
         autoscaling.knative.dev/minScale: "1"
         autoscaling.knative.dev/maxScale: "10"
+        # Critical for pull-based workers — without this, CPU is throttled
+        # between requests and Celery's broker poll loop stalls.
         run.googleapis.com/cpu-throttling: "false"
         run.googleapis.com/execution-environment: gen2
     spec:
       containerConcurrency: 1
       timeoutSeconds: 900
-      serviceAccountName: lyralabs-worker@PROJECT_ID.iam.gserviceaccount.com
+      # Use the same SA as lyralabs-app for now; in Sprint 2 we'll create a
+      # dedicated lyralabs-worker SA with narrower IAM bindings.
+      serviceAccountName: PLACEHOLDER_SA@PLACEHOLDER_PROJECT.iam.gserviceaccount.com
       containers:
-        - image: REGION-docker.pkg.dev/PROJECT_ID/lyralabs/worker:GIT_SHA
+        - image: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT/lyralabs/worker:PLACEHOLDER_GIT_SHA
+          # Override the Dockerfile's `CMD exec uvicorn ...` with the Celery
+          # worker. This is what makes the same image run as a worker instead
+          # of an API server.
+          command: ["celery"]
+          args:
+            - "-A"
+            - "apps.worker.celery_app:celery"
+            - "worker"
+            - "-Q"
+            - "agent"
+            - "--concurrency=4"
+            - "--loglevel=INFO"
           resources:
             limits:
               cpu: "2"
               memory: 2Gi
-          envFrom:
-            - secretRef:
-                name: lyralabs-env
+          # Env vars are listed in infra/cloud-run/README.md. The worker needs
+          # the same vars as lyralabs-app (DB, Redis, encryption keys, LLM)
+          # plus CELERY_BROKER_URL / CELERY_RESULT_BACKEND pointing at Upstash.
+          # Slack signing/client secrets are NOT needed here (no inbound
+          # webhooks reach the worker), but harmless to include.
+          env:
+            - name: APP_ENV
+              value: production
+            # All other env vars are configured via the Cloud Run console
+            # ("Variables & Secrets" tab) until we migrate to Secret Manager
+            # in Sprint 2. See infra/cloud-run/README.md for the full list.
