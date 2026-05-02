@@ -15,16 +15,36 @@ from typing import Any
 
 from slack_bolt.adapter.starlette.async_handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
+from slack_bolt.oauth.async_oauth_flow import AsyncOAuthFlow
 from slack_bolt.oauth.async_oauth_settings import AsyncOAuthSettings
+from slack_bolt.request.async_request import AsyncBoltRequest
 from slack_bolt.response import BoltResponse
 from slack_sdk.errors import SlackApiError
 
 from ...common.config import get_settings
 from ...common.logging import get_logger
 from ..schema import InboundMessage, Surface
-from .install_store import PostgresInstallationStore
+from .install_store import PostgresInstallationStore, _state_to_tenant
 
 log = get_logger(__name__)
+
+
+class _TenantAwareOAuthFlow(AsyncOAuthFlow):
+    """Extends the default OAuth flow to capture tenant_id from a signed `sig`
+    query param during installation and store it for the callback to retrieve."""
+
+    async def issue_new_state(self, request: AsyncBoltRequest) -> str:
+        state = await super().issue_new_state(request)
+        sig_values = request.query.get("sig")
+        sig = sig_values[0] if sig_values else None
+        if sig:
+            try:
+                from apps.api.oauth._state import decode_state  # noqa: PLC0415
+                tenant_id, _ = decode_state(sig)
+                _state_to_tenant[state] = tenant_id
+            except Exception:
+                pass
+        return state
 
 
 def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
@@ -60,6 +80,7 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
         app = AsyncApp(
             signing_secret=settings.slack_signing_secret,
             oauth_settings=oauth_settings,
+            oauth_flow=_TenantAwareOAuthFlow(settings=oauth_settings),
             # process_before_response=False (default) is correct for Cloud Run /
             # any long-running ASGI server: Bolt acks Slack within ~50ms and
             # runs handlers in a background asyncio task. With True, every

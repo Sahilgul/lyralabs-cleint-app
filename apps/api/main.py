@@ -77,11 +77,25 @@ async def slack_events(req: Request):
 
 @app.get("/oauth/slack/install")
 async def slack_install(req: Request):
+    # The `sig` query param is a short-lived signed JWT issued by
+    # /admin/auth/slack-install-url. _TenantAwareOAuthFlow.issue_new_state()
+    # reads it, verifies the signature, and stores state→tenant_id so the
+    # callback can link the pending tenant without trusting unsigned input.
     return await slack_handler.handle(req)
 
 
 @app.get("/oauth/slack/callback")
 async def slack_callback(req: Request):
+    from lyra_core.channels.slack.install_store import (  # noqa: PLC0415
+        _current_tenant_hint,
+        _state_to_tenant,
+    )
+
+    state = req.query_params.get("state")
+    if state:
+        tenant_id = _state_to_tenant.pop(state, None)
+        if tenant_id:
+            _current_tenant_hint.set(tenant_id)
     return await slack_handler.handle(req)
 
 

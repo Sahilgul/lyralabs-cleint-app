@@ -15,6 +15,7 @@ encrypted at rest with the tenant's Fernet key.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from logging import Logger
 from time import time
@@ -38,6 +39,14 @@ _ROTATION_BUFFER_SECS = 7200  # 2 hours
 
 log = get_logger(__name__)
 
+# Ephemeral map from Bolt's OAuth state token → tenant_id (populated during
+# handle_installation, consumed in handle_callback before async_save runs).
+_state_to_tenant: dict[str, str] = {}
+
+# ContextVar set by the /oauth/slack/callback endpoint just before calling
+# slack_handler.handle(), so async_save can find the right tenant.
+_current_tenant_hint: ContextVar[str | None] = ContextVar("_slack_tenant_hint", default=None)
+
 
 class PostgresInstallationStore(AsyncInstallationStore):
     """Async InstallationStore backed by Postgres + tenant-scoped Fernet encryption."""
@@ -52,25 +61,49 @@ class PostgresInstallationStore(AsyncInstallationStore):
         return self._logger or log  # type: ignore[return-value]
 
     @staticmethod
-    async def _ensure_tenant(team_id: str, team_name: str | None) -> str:
-        """Get-or-create the tenant row keyed on Slack team_id."""
+    async def _ensure_tenant(team_id: str, team_name: str | None, tenant_id_hint: str | None = None) -> str:
+        """Get-or-create the tenant row keyed on Slack team_id.
+
+        If `tenant_id_hint` is provided (passed via OAuth metadata from a
+        prior admin registration), we link the existing pending tenant to this
+        Slack team instead of creating a new one.
+        """
+        from ...db.models import AdminUser  # noqa: PLC0415
+
         async with async_session() as s:
+            # Check if there's already a tenant with this Slack team_id.
             row = (
                 await s.execute(select(Tenant).where(Tenant.external_team_id == team_id))
             ).scalar_one_or_none()
-            if row is None:
-                row = Tenant(
-                    external_team_id=team_id,
-                    channel="slack",
-                    name=team_name or team_id,
-                    plan="trial",
-                    status="active",
-                    trial_credit_remaining_usd=100.0,
-                )
-                s.add(row)
-                await s.commit()
-                await s.refresh(row)
-                log.info("tenant.created", tenant_id=row.id, team_id=team_id)
+            if row is not None:
+                return row.id
+
+            # Try to link an existing pending tenant (created during admin registration).
+            if tenant_id_hint:
+                pending = (
+                    await s.execute(select(Tenant).where(Tenant.id == tenant_id_hint))
+                ).scalar_one_or_none()
+                if pending is not None and pending.external_team_id.startswith("pending-"):
+                    pending.external_team_id = team_id
+                    if team_name:
+                        pending.name = team_name
+                    await s.commit()
+                    log.info("tenant.linked", tenant_id=pending.id, team_id=team_id)
+                    return pending.id
+
+            # No pending tenant found — create a fresh one (direct Slack install path).
+            row = Tenant(
+                external_team_id=team_id,
+                channel="slack",
+                name=team_name or team_id,
+                plan="trial",
+                status="active",
+                trial_credit_remaining_usd=100.0,
+            )
+            s.add(row)
+            await s.commit()
+            await s.refresh(row)
+            log.info("tenant.created", tenant_id=row.id, team_id=team_id)
             return row.id
 
     async def _async_find(
@@ -91,7 +124,8 @@ class PostgresInstallationStore(AsyncInstallationStore):
         team_id = installation.team_id or installation.enterprise_id
         if not team_id:
             raise ValueError("Slack installation missing team_id and enterprise_id")
-        tenant_id = await self._ensure_tenant(team_id, installation.team_name)
+        tenant_id_hint: str | None = _current_tenant_hint.get()
+        tenant_id = await self._ensure_tenant(team_id, installation.team_name, tenant_id_hint)
 
         async with async_session() as s:
             row = SlackInstallation(
