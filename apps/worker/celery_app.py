@@ -14,11 +14,16 @@ from lyra_core.common.logging import configure_logging
 settings = get_settings()
 configure_logging(level=settings.log_level, json_logs=settings.is_prod)
 
+from celery.schedules import crontab
+
 celery = Celery(
     "lyralabs",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["apps.worker.tasks.run_agent"],
+    include=[
+        "apps.worker.tasks.run_agent",
+        "apps.worker.tasks.crystallize_skills",
+    ],
 )
 
 celery.conf.update(
@@ -34,8 +39,15 @@ celery.conf.update(
     task_routes={
         "apps.worker.tasks.run_agent.run_agent": {"queue": "agent"},
         "apps.worker.tasks.run_agent.resume_agent": {"queue": "agent"},
+        "apps.worker.tasks.crystallize_skills.crystallize_skills": {"queue": "default"},
     },
     broker_transport_options={"visibility_timeout": 3600},
+    beat_schedule={
+        "crystallize-skills-nightly": {
+            "task": "apps.worker.tasks.crystallize_skills.crystallize_skills",
+            "schedule": crontab(hour=3, minute=0),  # 3 AM UTC
+        },
+    },
 )
 
 if settings.app_env == "test":
