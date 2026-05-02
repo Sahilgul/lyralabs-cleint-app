@@ -15,6 +15,15 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         return tool
 
+    def register_or_update(self, tool: Tool) -> Tool:
+        """Register a tool, silently replacing any existing entry with the same name.
+
+        Used by MCP discovery which re-runs on cache expiry and would otherwise
+        raise ValueError for tools already registered in a previous discovery pass.
+        """
+        self._tools[tool.name] = tool
+        return tool
+
     def get(self, name: str) -> Tool:
         if name not in self._tools:
             raise KeyError(f"unknown tool: {name}")

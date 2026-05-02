@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, Generic, TypeVar
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +32,21 @@ class ApprovalRequired(Exception):
         self.preview = preview
 
 
+class TrustTier(str, Enum):
+    LOW = "low"       # read-only; auto-approved, no interrupt
+    MEDIUM = "medium"  # write with limited blast radius; Approve/Reject button
+    HIGH = "high"     # irreversible or bulk; requires "I confirm" text confirmation
+
+
+@dataclass
+class RiskProfile:
+    tier: TrustTier
+    reversibility: Literal["reversible", "irreversible"]
+    blast_radius: Literal["single", "batch", "bulk"]
+    cost_estimate_usd: float = 0.0
+    rationale: str = ""
+
+
 class ToolContext(BaseModel):
     """Per-call execution context. Carries the tenant id and a getter for
     integration credentials, so tools never touch the DB or env directly."""
@@ -38,6 +55,13 @@ class ToolContext(BaseModel):
     job_id: str | None = None
     user_id: str | None = None
     dry_run: bool = False
+    client_id: str | None = None
+    # Per-(tenant, client, server_key) auth headers for MCP servers.
+    # McpToolAdapter builds these from creds_lookup if not provided.
+    mcp_server_headers: dict[str, dict[str, str]] | None = None
+    # When True, tools should return a description of what they would do
+    # without performing actual side-effects. Used by the rehearsal engine.
+    simulation_mode: bool = False
     creds_lookup: Any = Field(default=None, description="callable: provider -> ProviderCredentials")
     extra: dict[str, Any] = Field(default_factory=dict)
 
@@ -62,6 +86,8 @@ class Tool(ABC, Generic[InT, OutT]):
     description: ClassVar[str]
     requires_approval: ClassVar[bool] = False
     provider: ClassVar[str] = ""  # "google" | "ghl" | "" (no creds needed)
+    trust_tier: ClassVar[TrustTier] = TrustTier.MEDIUM
+    blast_radius: ClassVar[Literal["single", "batch", "bulk"]] = "single"
 
     Input: ClassVar[type[BaseModel]]
     Output: ClassVar[type[BaseModel]]
@@ -69,6 +95,17 @@ class Tool(ABC, Generic[InT, OutT]):
     @abstractmethod
     async def run(self, ctx: ToolContext, args: InT) -> OutT:
         """Implement the side-effecting work."""
+
+    async def simulate(self, ctx: ToolContext, args: InT) -> str:
+        """Return a human-readable preview of what run() would do.
+
+        Default implementation JSON-dumps the args. Override for richer previews
+        that fetch live data without mutating anything (e.g. rendering a diff).
+        """
+        try:
+            return f"Will call `{self.name}` with: {args.model_dump_json(indent=2)}"
+        except Exception:
+            return f"Will call `{self.name}`."
 
     async def safe_run(self, ctx: ToolContext, args: InT) -> ToolResult[OutT]:
         """Wrap `run` with error handling. Always returns a ToolResult."""
