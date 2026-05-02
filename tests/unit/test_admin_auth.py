@@ -56,7 +56,7 @@ async def test_invalid_signature_raises_401() -> None:
     bad = jwt.encode(
         {"tenant_id": "t", "email": "x", "iss": get_settings().admin_jwt_issuer,
          "exp": int(time.time()) + 60},
-        "wrong-secret",
+        "wrong-secret-padded-to-32-bytes!!",
         algorithm="HS256",
     )
     with pytest.raises(HTTPException) as exc:

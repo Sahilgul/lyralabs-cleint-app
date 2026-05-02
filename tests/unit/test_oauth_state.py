@@ -38,7 +38,7 @@ def test_decode_rejects_bad_signature() -> None:
     settings = get_settings()
     bogus = jwt.encode(
         {"tid": "t", "exp": int(time.time()) + 60, "iss": settings.admin_jwt_issuer},
-        "wrong-secret",
+        "wrong-secret-padded-to-32-bytes!!",
         algorithm="HS256",
     )
     with pytest.raises(jwt.InvalidSignatureError):

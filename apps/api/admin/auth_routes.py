@@ -65,7 +65,7 @@ async def register(body: RegisterIn) -> TokenOut:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid passcode")
 
     if len(body.password) < 8:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "password must be at least 8 characters")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "password must be at least 8 characters")
 
     async with async_session() as s:
         # Prevent duplicate emails.

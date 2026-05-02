@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009485)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-457%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-523%20passing-brightgreen)](#testing)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -152,9 +152,10 @@ lyralabs/
 │   │   ├── stripe_webhook.py      Handles subscription / invoice events
 │   │   ├── admin/
 │   │   │   ├── auth.py            JWT-bearing admin principal dependency
+│   │   │   ├── auth_routes.py     POST /register (auto-creates Tenant + Client), POST /login, GET /slack-install-url
 │   │   │   └── routes.py          /me, /integrations, /jobs, /audit, /cost, /billing/*
 │   │   └── oauth/
-│   │       ├── _state.py          Signed JWT state for OAuth round-trips
+│   │       ├── _state.py          Signed JWT state for OAuth round-trips (used by Google, GHL, and Slack install)
 │   │       ├── google.py          /oauth/google/{install,callback}
 │   │       └── ghl.py             /oauth/ghl/{install,callback}
 │   ├── worker/                    Celery
@@ -200,7 +201,7 @@ lyralabs/
 │
 ├── tests/
 │   ├── conftest.py                Env shim + shared fixtures (mock_session, make_ctx, patch_chat …)
-│   ├── unit/  (457 tests)         One test file per source module — see Testing section
+│   ├── unit/  (523 tests)         One test file per source module — see Testing section
 │   └── integration/               Reserved for tests that need real Postgres
 │
 ├── infra/
@@ -380,8 +381,10 @@ means the agent core needs no changes to support it.
 
 - **Per-tenant token encryption.** Every OAuth access/refresh token is encrypted with a Fernet key derived per-tenant via HKDF-SHA256 from a single master key. A bug in tenant `A` cannot decrypt tenant `B`'s tokens (verified in `test_crypto.py::TestTenantIsolation`).
 - **Append-only audit log.** Every tool call records `tenant_id`, `actor_user_id`, `job_id`, `tool_name`, SHA-256 args hash, cost, and status. Optionally store raw args (off by default for privacy).
+- **Registration-first onboarding.** Users register at the admin UI (email + password + passcode) — no Slack team ID required. Registration auto-creates a `Tenant` and a synthetic `agency_internal` `Client` in one transaction. The onboarding checklist then guides: Connect Slack → Connect Google → Connect GoHighLevel → Mention @ARLO.
 - **JWT admin auth.** The admin REST API requires `Authorization: Bearer <jwt>` signed with `ADMIN_JWT_SECRET`, with `tenant_id` and `email` claims, scoped strictly to the caller's tenant.
-- **Signed OAuth state.** OAuth round-trips carry a 10-minute JWT `state` so a callback on a stolen URL can't attach to the wrong tenant.
+- **Signed Slack install URL.** `GET /admin/auth/slack-install-url` (authenticated) returns a 10-minute signed URL containing the caller's `tenant_id`. The install handler (`_TenantAwareOAuthFlow`) verifies the signature and stores `state→tenant_id`; on callback the pending tenant is linked to the real Slack workspace. An unsigned `?tenant_id=` query param is never trusted — this closes the CSRF-style binding attack where a crafted link could attach a victim's Slack workspace to the wrong tenant.
+- **Signed OAuth state.** All OAuth round-trips (Google, GHL, Slack) carry a 10-minute JWT `state` so a callback on a stolen URL can't attach to the wrong tenant.
 - **Approval gate.** Any tool with `requires_approval=True` triggers `interrupt()`; nothing mutates without an explicit Slack button click.
 - **Trial credit limit.** Each tenant gets `STRIPE_TRIAL_CREDIT_USD` (default $100) of free LLM + tool spend, tracked via the audit log's `cost_usd`.
 
@@ -447,7 +450,8 @@ tenants ◄──┬─── users
 
 Notable details:
 
-- `Tenant.external_team_id` is unique → maps to Slack `team_id` or Teams tenant id.
+- `Tenant.external_team_id` is unique → maps to Slack `team_id` or Teams tenant id. Until Slack is connected it holds `"pending-{user_id}"` as a placeholder (set at registration); the install callback replaces it with the real `team_id`.
+- `Client` — every Tenant gets a synthetic `Client(slug='agency_internal')` created at registration time (same transaction as the Tenant). Credential lookups and client-scoped queries always have a row to bind to from day one.
 - `IntegrationConnection` has a unique `(tenant_id, provider, external_account_id)` — re-auth updates in place.
 - `Job.thread_id` is the LangGraph thread key; `(tenant_id, thread_id)` are indexed for cheap admin lookups.
 - `AuditEvent` has a composite `(tenant_id, ts)` index for the per-tenant timeline view.
@@ -491,7 +495,7 @@ The api will be at `http://localhost:8000` (`/healthz`, `/readyz`, `/docs` for S
 uv venv .venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
-make test                         # 457 tests, ~8s
+make test                         # 523 tests, ~8s
 ```
 
 ---
@@ -590,7 +594,7 @@ make gen-key
 
 ## Testing
 
-**457 unit tests, 100% passing in ~8s.** Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
+**523 unit tests, 100% passing in ~8s.** Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
 
 ```bash
 make test                         # run everything
@@ -605,16 +609,16 @@ make test-coverage                # with coverage report
 | `common/` (config, crypto, logging incl. phase(), llm, audit)   |    55 |
 | `llm/` (catalog, router)                                        |    54 |
 | `db/` (model schema, defaults, indices, constraints)            |    17 |
-| `channels/` (schema incl. agent_thread_id, slack adapter, install_store, poster, teams) | 51 |
+| `channels/` (schema incl. agent_thread_id, slack adapter, install_store, poster, teams) | 57 |
 | `tools/` core (base, registry, credentials)                     |    31 |
 | `tools/slack/*` (history, replies, users.info/list, search, canvas) | 8 |
 | `tools/google/*`                                                |    35 |
 | `tools/ghl/*`                                                   |    39 |
 | `tools/artifacts/*` (pdf markdown, charts)                      |    18 |
 | `agent/` (state, memory + cache, all 7 nodes, graph wiring)     |    67 |
-| `apps/api/*` (oauth state/google/ghl, admin auth+routes, admin_llm, stripe webhook, main) | 60 |
+| `apps/api/*` (oauth state/google/ghl, admin auth+routes, admin_llm, stripe webhook, main) | 69 |
 | `apps/worker/*` (celery config, run_agent, resume_agent)        |    22 |
-| **Total**                                                       |  **457** |
+| **Total**                                                       |  **523** |
 
 ### Test design
 
@@ -654,7 +658,7 @@ CI gates (GitHub Actions on this repo):
 
 1. `ruff check` + `ruff format --check`
 2. `mypy packages apps`
-3. `make test` (the full 457-test suite)
+3. `make test` (the full 523-test suite)
 4. Build + push image to Artifact Registry (`us-east1-docker.pkg.dev/<project>/lyralabs/lyralabs-app`)
 5. `gcloud run deploy lyralabs-app`, blue/green via revisions
 
