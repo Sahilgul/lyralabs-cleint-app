@@ -37,21 +37,56 @@ class ProviderCredentials(BaseModel):
     metadata: dict = {}
 
 
-async def get_credentials(tenant_id: str, provider: str) -> ProviderCredentials:
-    """Return a fresh, decrypted credential for the given provider."""
+async def get_credentials(
+    tenant_id: str,
+    provider: str,
+    client_id: str | None = None,
+) -> ProviderCredentials:
+    """Return a fresh, decrypted credential for the given provider.
+
+    If `client_id` is provided, looks for a client-scoped credential first.
+    Falls back to a tenant-level credential (client_id IS NULL) if none found.
+    This lets agency-level integrations (e.g. Google Workspace) work without
+    a client scope while per-client GHL sub-accounts carry client_id.
+    """
     async with async_session() as s:
+        # Try client-scoped credential first (or tenant-level if client_id is None)
+        filters = [
+            IntegrationConnection.tenant_id == tenant_id,
+            IntegrationConnection.provider == provider,
+            IntegrationConnection.status == "active",
+        ]
+        if client_id is not None:
+            filters.append(IntegrationConnection.client_id == client_id)
+        else:
+            filters.append(IntegrationConnection.client_id.is_(None))
+
         row = (
             await s.execute(
                 select(IntegrationConnection)
-                .where(
-                    IntegrationConnection.tenant_id == tenant_id,
-                    IntegrationConnection.provider == provider,
-                    IntegrationConnection.status == "active",
-                )
+                .where(*filters)
                 .order_by(IntegrationConnection.created_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+        # Fallback: if a client_id was given but no client-scoped credential exists,
+        # try the tenant-level credential for this provider.
+        if row is None and client_id is not None:
+            row = (
+                await s.execute(
+                    select(IntegrationConnection)
+                    .where(
+                        IntegrationConnection.tenant_id == tenant_id,
+                        IntegrationConnection.provider == provider,
+                        IntegrationConnection.status == "active",
+                        IntegrationConnection.client_id.is_(None),
+                    )
+                    .order_by(IntegrationConnection.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
         if row is None:
             raise RuntimeError(
                 f"No active {provider!r} integration for tenant {tenant_id!r}. "

@@ -238,6 +238,33 @@ async def _disable_workspace(team_id: str | None) -> None:
         await s.commit()
 
 
+async def _resolve_client_id(team_id: str, channel_id: str) -> str | None:
+    """Return the Client.id whose primary_slack_channel_id matches channel_id.
+
+    Joins tenants → clients using the unique index on (tenant_id, primary_slack_channel_id),
+    so this is O(1). Returns None for DMs or channels not mapped to any client.
+    """
+    from sqlalchemy import select
+
+    from ...db.models import Client, Tenant
+    from ...db.session import async_session
+
+    async with async_session() as s:
+        row = (
+            await s.execute(
+                select(Client.id)
+                .join(Tenant, Tenant.id == Client.tenant_id)
+                .where(
+                    Tenant.external_team_id == team_id,
+                    Client.primary_slack_channel_id == channel_id,
+                    Client.status == "active",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    return row
+
+
 async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     """Translate a Slack event into InboundMessage + dispatch to Celery.
 
@@ -276,6 +303,15 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     channel_id: str = event.get("channel", "")
     user_id: str = event.get("user", "")
 
+    # O(1) via unique index on (tenant_id, primary_slack_channel_id).
+    # DMs and unmapped channels return None (agency-internal job).
+    client_id: str | None = None
+    if not is_dm and channel_id and team_id:
+        try:
+            client_id = await _resolve_client_id(team_id, channel_id)
+        except Exception:
+            log.warning("slack.client_resolve.error", team=team_id, channel=channel_id, exc_info=True)
+
     if slack_thread_ts:
         reply_thread_ts: str | None = slack_thread_ts
     elif is_dm:
@@ -307,6 +343,7 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
         files=event.get("files", []),
         reply_thread_ts=reply_thread_ts,
         is_dm=is_dm,
+        client_id=client_id,
         raw=body,
     )
     if not msg.text:

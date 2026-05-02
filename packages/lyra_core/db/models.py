@@ -71,6 +71,9 @@ class Tenant(Base):
     integrations: Mapped[list[IntegrationConnection]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
     )
+    clients: Mapped[list[Client]] = relationship(
+        back_populates="tenant", cascade="all, delete-orphan"
+    )
 
 
 class User(Base):
@@ -145,6 +148,81 @@ class SlackInstallation(Base):
 
 
 # -----------------------------------------------------------------------------
+# Clients and Campaigns
+# -----------------------------------------------------------------------------
+
+
+class Client(Base):
+    """A customer or sub-account under a Tenant. For agencies, one row per client brand.
+
+    GHL location IDs, Meta account IDs, etc. live in IntegrationConnection.external_account_id
+    keyed by (tenant_id, client_id, provider) — not in a JSONB blob here.
+    """
+
+    __tablename__ = "clients"
+    __table_args__ = (
+        Index("ix_clients_tenant_id", "tenant_id"),
+        UniqueConstraint("tenant_id", "slug", name="uq_client_slug_per_tenant"),
+        # Primary O(1) lookup: Slack adapter resolves inbound channel_id → client_id
+        UniqueConstraint(
+            "tenant_id", "primary_slack_channel_id", name="uq_client_slack_channel"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text)
+    # slug is how users reference clients in Slack: "@ARLO pull deals for `acme`"
+    slug: Mapped[str] = mapped_column(Text)
+    primary_slack_channel_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")  # active|paused|archived
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    tenant: Mapped[Tenant] = relationship(back_populates="clients")
+    campaigns: Mapped[list[Campaign]] = relationship(
+        back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+class Campaign(Base):
+    """A cross-tool marketing campaign owned by a Client.
+
+    Schema lands now; agent code paths use it in v2. The spec/state_data JSONB
+    fields are flexible enough to back any campaign state machine.
+    """
+
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        Index("ix_campaigns_tenant_id", "tenant_id"),
+        Index("ix_campaigns_client_id", "client_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"))
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # e.g. "email_sequence", "sms_blast"
+    status: Mapped[str] = mapped_column(
+        String(32), default="draft"
+    )  # draft|active|paused|completed
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    state_data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    client: Mapped[Client] = relationship(back_populates="campaigns")
+
+
+# -----------------------------------------------------------------------------
 # Integrations
 # -----------------------------------------------------------------------------
 
@@ -159,13 +237,22 @@ class IntegrationConnection(Base):
     __tablename__ = "integration_connections"
     __table_args__ = (
         UniqueConstraint(
-            "tenant_id", "provider", "external_account_id", name="uq_integration_per_account"
+            "tenant_id",
+            "client_id",
+            "provider",
+            "external_account_id",
+            name="uq_integration_per_account",
         ),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    # Nullable: tenant-level connections (e.g. Google Workspace) have no client scope.
+    # Client-scoped connections (e.g. GHL sub-account per agency client) set this.
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
     provider: Mapped[str] = mapped_column(String(32), index=True)  # google|ghl|stripe|...
     external_account_id: Mapped[str] = mapped_column(String(128))
@@ -198,10 +285,14 @@ class Job(Base):
     """
 
     __tablename__ = "jobs"
+    __table_args__ = (Index("ix_jobs_tenant_client", "tenant_id", "client_id"),)
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
     thread_id: Mapped[str] = mapped_column(String(128), index=True)
     user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -226,11 +317,17 @@ class AuditEvent(Base):
     """Append-only log of every meaningful action (tool calls, approvals, errors)."""
 
     __tablename__ = "audit_events"
-    __table_args__ = (Index("ix_audit_tenant_ts", "tenant_id", "ts"),)
+    __table_args__ = (
+        Index("ix_audit_tenant_ts", "tenant_id", "ts"),
+        Index("ix_audit_tenant_client_ts", "tenant_id", "client_id", "ts"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id: Mapped[str] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
     actor_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -243,6 +340,74 @@ class AuditEvent(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     extra: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+# -----------------------------------------------------------------------------
+# Living Artifact + Skills (reflexive cognition layer)
+# -----------------------------------------------------------------------------
+
+
+class WorkspaceArtifact(Base):
+    """Durable per-thread workspace state distilled after each completed job.
+
+    One row per (tenant_id, client_id, thread_id). The `body` JSONB holds
+    key/value facts the agent has learned: client preferences, pipeline names,
+    last actions taken, etc. Injected into the agent system prompt every turn.
+    """
+
+    __tablename__ = "workspace_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "client_id", "thread_id", name="uq_artifact_per_thread"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    thread_id: Mapped[str] = mapped_column(String(128), index=True)
+    body: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class Skill(Base):
+    """A promoted tool-sequence shortcut for a (tenant, client) pair.
+
+    The Skill Crystallizer mines audit_events and creates a Skill row when it
+    sees the same (tool_name, arg_schema_shape) sequence appear >= 5 times.
+    The agent sees skill slugs in its system prompt as workflow shortcuts.
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "client_id", "slug", name="uq_skill_per_client"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(Text)
+    slug: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # [{tool_name: str, arg_schema_shape: [[key, type_name]]}]
+    tool_sequence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    usage_count: Mapped[int] = mapped_column(default=0)
+    promoted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
 
 # -----------------------------------------------------------------------------

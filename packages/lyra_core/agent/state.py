@@ -19,6 +19,10 @@ class PlanStep(BaseModel):
     depends_on: list[str] = Field(
         default_factory=list, description="ids of earlier steps whose output this one needs"
     )
+    # Populated by approval_node after trust classification.
+    trust_tier: str = "medium"
+    # Human-readable preview of what this step would do; set by rehearsal engine.
+    simulation_preview: str | None = None
 
 
 class Plan(BaseModel):
@@ -47,6 +51,7 @@ class AgentState(TypedDict, total=False):
 
     # --- inputs (set once at graph entry) ---
     tenant_id: str
+    client_id: str | None  # which client this job is for; None = agency-internal
     job_id: str
     channel_id: str
     thread_id: str
@@ -75,6 +80,13 @@ class AgentState(TypedDict, total=False):
     artifacts: list[dict[str, Any]]  # [{kind, filename, b64_content, description}]
     error: str | None
     total_cost_usd: float
+
+    # Trust gradient: per-step RiskProfile dicts populated by approval_node.
+    risk_profiles: list[dict[str, Any]]
+    # Living Artifact: durable per-thread workspace facts, distilled after each job.
+    living_artifact: dict[str, Any]
+    # Skill shortcuts promoted by the Skill Crystallizer for this (tenant, client).
+    active_skills: list[dict[str, Any]]
 
     # --- chat-style messages (used by some nodes for tool-calling LLM loops) ---
     # Note: not using langgraph's `add_messages` reducer for MVP; nodes return

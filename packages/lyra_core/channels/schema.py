@@ -60,6 +60,9 @@ class InboundMessage(BaseModel):
         ),
     )
     is_dm: bool = False
+    # Resolved by the channel adapter from primary_slack_channel_id → clients.id.
+    # None when the channel is not mapped to a specific client (agency-internal job).
+    client_id: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict, description="Original platform payload")
 
 

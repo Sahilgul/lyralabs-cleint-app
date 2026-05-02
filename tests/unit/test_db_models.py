@@ -27,6 +27,10 @@ def test_all_tables_registered() -> None:
         "audit_events",
         "llm_providers",
         "llm_model_assignments",
+        "clients",
+        "campaigns",
+        "workspace_artifacts",
+        "skills",
     }
     assert set(Base.metadata.tables.keys()) == expected
 
