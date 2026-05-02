@@ -16,6 +16,14 @@ from apps.worker.tasks.run_agent import (
 )
 
 
+def _make_ctx() -> dict:
+    """Minimal arq context dict with a mock Redis client (lock always acquired)."""
+    redis = AsyncMock()
+    redis.set = AsyncMock(return_value=True)   # lock acquired
+    redis.delete = AsyncMock(return_value=1)
+    return {"redis": redis, "job_try": 1}
+
+
 def _make_msg(text: str = "do x", *, is_dm: bool = False) -> str:
     return InboundMessage(
         surface=Surface.SLACK,
@@ -89,14 +97,14 @@ class _FakeSession:
 @pytest.mark.asyncio
 async def test_run_no_tenant(monkeypatch) -> None:
     _patch_session_chain(monkeypatch, [_FakeSession(tenant=None)])
-    out = await _run(_make_msg())
+    out = await _run(_make_ctx(), _make_msg())
     assert out == {"status": "no_tenant"}
 
 
 @pytest.mark.asyncio
 async def test_run_inactive_tenant(monkeypatch) -> None:
     _patch_session_chain(monkeypatch, [_FakeSession(tenant=_tenant(status="cancelled"))])
-    out = await _run(_make_msg())
+    out = await _run(_make_ctx(), _make_msg())
     assert out == {"status": "tenant_inactive"}
 
 
@@ -132,7 +140,7 @@ async def test_run_happy_path_invokes_graph(monkeypatch) -> None:
     )
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    out = await _run(_make_msg("hello"))
+    out = await _run(_make_ctx(), _make_msg("hello"))
     assert out["status"] == "done"
     assert out["job_id"] == "job-uuid-1"
     assert job_row.status == "done"
@@ -165,7 +173,7 @@ async def test_run_dm_preserves_assistant_status_thread(monkeypatch) -> None:
     fake_graph.ainvoke = AsyncMock(return_value={"final_summary": "ok", "total_cost_usd": 0})
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    await _run(_make_msg("hello", is_dm=True))
+    await _run(_make_ctx(), _make_msg("hello", is_dm=True))
 
     initial_state = fake_graph.ainvoke.await_args.args[0]
     assert initial_state["assistant_status_thread_ts"] == "thr-1"
@@ -195,10 +203,12 @@ async def test_run_graph_crash_marks_job_failed(monkeypatch) -> None:
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
 
     fake_graph = MagicMock()
-    fake_graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+    # ValueError is non-retryable — _should_retry returns False, so the handler
+    # returns {"status": "failed"} immediately without raising Retry.
+    fake_graph.ainvoke = AsyncMock(side_effect=ValueError("boom"))
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    out = await _run(_make_msg())
+    out = await _run(_make_ctx(), _make_msg())
     assert out["status"] == "failed"
     assert out["error"] == "boom"
     assert job_row.status == "failed"
@@ -213,7 +223,7 @@ async def test_run_graph_crash_marks_job_failed(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_resume_no_job(monkeypatch) -> None:
     _patch_session_chain(monkeypatch, [_FakeSession(job=None)])
-    out = await _resume(job_id="missing", decision="approved", user_id="u")
+    out = await _resume(_make_ctx(), job_id="missing", decision="approved", user_id="u")
     assert out == {"status": "no_job"}
 
 
@@ -246,7 +256,7 @@ async def test_resume_approved_marks_done(monkeypatch) -> None:
     )
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    out = await _resume(job_id="job-1", decision="approved", user_id="u")
+    out = await _resume(_make_ctx(), job_id="job-1", decision="approved", user_id="u")
     assert out == {"status": "done", "job_id": "job-1"}
     assert job_row.status == "done"
     assert job_row.cost_usd == pytest.approx(0.005)
@@ -276,7 +286,7 @@ async def test_resume_rejected_marks_rejected(monkeypatch) -> None:
     )
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    out = await _resume(job_id="job-1", decision="rejected", user_id="u")
+    out = await _resume(_make_ctx(), job_id="job-1", decision="rejected", user_id="u")
     assert out == {"status": "rejected", "job_id": "job-1"}
     assert job_row.status == "rejected"
 
@@ -300,10 +310,12 @@ async def test_resume_graph_crash_marks_failed(monkeypatch) -> None:
 
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
     fake_graph = MagicMock()
-    fake_graph.ainvoke = AsyncMock(side_effect=RuntimeError("explode"))
+    # ValueError is non-retryable — _should_retry returns False, so the handler
+    # returns {"status": "failed"} immediately without raising Retry.
+    fake_graph.ainvoke = AsyncMock(side_effect=ValueError("explode"))
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
-    out = await _resume(job_id="job-1", decision="approved", user_id="u")
+    out = await _resume(_make_ctx(), job_id="job-1", decision="approved", user_id="u")
     assert out["status"] == "failed"
     assert job_row.status == "failed"
     assert job_row.error == "explode"
@@ -335,7 +347,9 @@ async def test_mark_job_no_job_no_op(monkeypatch) -> None:
     await _mark_job("missing", status="done")
 
 
-def test_run_agent_celery_task_registered() -> None:
-    """Eager mode + sync caller works (smoke)."""
-    assert "apps.worker.tasks.run_agent.run_agent" in task_mod.celery.tasks
-    assert "apps.worker.tasks.run_agent.resume_agent" in task_mod.celery.tasks
+def test_run_agent_is_async() -> None:
+    """run_agent and resume_agent must be plain async functions (not sync wrappers)."""
+    import inspect
+
+    assert inspect.iscoroutinefunction(task_mod.run_agent)
+    assert inspect.iscoroutinefunction(task_mod.resume_agent)

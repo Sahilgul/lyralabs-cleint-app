@@ -27,8 +27,7 @@ dev-api:
 	PYTHONPATH=packages:. .venv/bin/uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000
 
 dev-worker:
-	PYTHONPATH=packages:. .venv/bin/celery -A apps.worker.celery_app:celery worker \
-		--loglevel=info --queues=default,agent --concurrency=2
+	PYTHONPATH=packages:. .venv/bin/python -m arq apps.worker.arq_app.WorkerSettings
 
 migrate:
 	PYTHONPATH=packages:. .venv/bin/alembic upgrade head

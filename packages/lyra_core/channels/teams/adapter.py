@@ -44,7 +44,7 @@ def build_teams_app() -> Any:
 
     async def on_turn(turn_context):  # noqa: ANN001
         """Handle an inbound Teams activity."""
-        from apps.worker.tasks.run_agent import run_agent  # noqa: PLC0415
+        from lyra_core.worker.queue import enqueue_run_agent  # noqa: PLC0415
 
         activity: Activity = turn_context.activity
         if activity.type != "message" or not activity.text:
@@ -74,6 +74,6 @@ def build_teams_app() -> Any:
             text=activity.text.strip(),
             raw=activity.serialize() if hasattr(activity, "serialize") else {},
         )
-        run_agent.delay(message_json=msg.model_dump_json())
+        await enqueue_run_agent(msg.model_dump_json())
 
     return adapter, on_turn

@@ -36,13 +36,10 @@ def test_build_slack_app_with_oauth(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_from_event_dispatches_to_celery(monkeypatch) -> None:
-    """Slack message events are normalized + sent to run_agent.delay."""
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+async def test_enqueue_from_event_dispatches_to_arq(monkeypatch) -> None:
+    """Slack message events are normalized + sent to enqueue_run_agent."""
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         body = {
             "team_id": "T-XYZ",
             "event": {
@@ -56,19 +53,16 @@ async def test_enqueue_from_event_dispatches_to_celery(monkeypatch) -> None:
         }
         await _enqueue_from_event(body)
 
-    assert fake_run_agent.delay.called
-    payload = fake_run_agent.delay.call_args.kwargs["message_json"]
+    fake_enqueue.assert_awaited_once()
+    payload = fake_enqueue.call_args.args[0]
     assert "T-XYZ" in payload
     assert "hello bot" in payload
 
 
 @pytest.mark.asyncio
 async def test_enqueue_skips_empty_text(monkeypatch) -> None:
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -76,16 +70,13 @@ async def test_enqueue_skips_empty_text(monkeypatch) -> None:
             }
         )
 
-    assert not fake_run_agent.delay.called
+    fake_enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_enqueue_falls_back_thread_ts_to_ts(monkeypatch) -> None:
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -99,7 +90,7 @@ async def test_enqueue_falls_back_thread_ts_to_ts(monkeypatch) -> None:
             }
         )
 
-    payload = fake_run_agent.delay.call_args.kwargs["message_json"]
+    payload = fake_enqueue.call_args.args[0]
     assert "9999.0000" in payload
 
 
@@ -112,11 +103,8 @@ async def test_enqueue_dm_top_level_does_not_thread_reply() -> None:
     """
     import json
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -131,7 +119,7 @@ async def test_enqueue_dm_top_level_does_not_thread_reply() -> None:
             }
         )
 
-    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    payload = json.loads(fake_enqueue.call_args.args[0])
     assert payload["is_dm"] is True
     assert payload["reply_thread_ts"] is None
     assert payload["thread_id"] == "9999.0000"
@@ -144,11 +132,8 @@ async def test_enqueue_dm_inside_thread_keeps_thread_reply() -> None:
     """
     import json
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -164,7 +149,7 @@ async def test_enqueue_dm_inside_thread_keeps_thread_reply() -> None:
             }
         )
 
-    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    payload = json.loads(fake_enqueue.call_args.args[0])
     assert payload["is_dm"] is True
     assert payload["reply_thread_ts"] == "1111.1111"
 
@@ -177,12 +162,9 @@ async def test_enqueue_dm_uses_continuous_agent_thread_id() -> None:
     """
     import json
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
+    fake_enqueue = AsyncMock()
     payloads = []
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         for ts in ("1.0", "2.0", "3.0"):
             await _enqueue_from_event(
                 {
@@ -197,9 +179,7 @@ async def test_enqueue_dm_uses_continuous_agent_thread_id() -> None:
                     },
                 }
             )
-            payloads.append(
-                json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
-            )
+            payloads.append(json.loads(fake_enqueue.call_args.args[0]))
 
     keys = {p["agent_thread_id"] for p in payloads}
     assert keys == {"slack:dm:T1:D-dm:U-sahil"}, (
@@ -217,11 +197,8 @@ async def test_enqueue_channel_mention_scopes_agent_thread_to_slack_thread() -> 
     """
     import json
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         # First mention: brand-new top-level message in #general.
         await _enqueue_from_event(
             {
@@ -236,7 +213,7 @@ async def test_enqueue_channel_mention_scopes_agent_thread_to_slack_thread() -> 
                 },
             }
         )
-        first = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+        first = json.loads(fake_enqueue.call_args.args[0])
         # Second mention: a reply inside an existing thread (different thread_ts).
         await _enqueue_from_event(
             {
@@ -252,7 +229,7 @@ async def test_enqueue_channel_mention_scopes_agent_thread_to_slack_thread() -> 
                 },
             }
         )
-        second = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+        second = json.loads(fake_enqueue.call_args.args[0])
 
     assert first["agent_thread_id"] == "slack:ch:T1:C-general:100.0"
     assert second["agent_thread_id"] == "slack:ch:T1:C-general:999.0"
@@ -266,11 +243,8 @@ async def test_enqueue_channel_mention_threads_on_user_message() -> None:
     """
     import json
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    fake_enqueue = AsyncMock()
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -285,7 +259,7 @@ async def test_enqueue_channel_mention_threads_on_user_message() -> None:
             }
         )
 
-    payload = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+    payload = json.loads(fake_enqueue.call_args.args[0])
     assert payload["is_dm"] is False
     assert payload["reply_thread_ts"] == "3333.3333"
 
@@ -293,15 +267,12 @@ async def test_enqueue_channel_mention_threads_on_user_message() -> None:
 @pytest.mark.asyncio
 async def test_enqueue_dm_with_client_fires_assistant_status() -> None:
     """DM events with a client get a native 'Thinking…' status indicator."""
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
+    fake_enqueue = AsyncMock()
     client = MagicMock()
     client.assistant_threads_setStatus = AsyncMock()
     client.reactions_add = AsyncMock()
 
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -323,22 +294,19 @@ async def test_enqueue_dm_with_client_fires_assistant_status() -> None:
     assert kwargs["thread_ts"] == "9999.0000"
     assert kwargs["status"] == "Thinking…"
     client.reactions_add.assert_not_called()
-    assert fake_run_agent.delay.called  # still enqueues
+    fake_enqueue.assert_awaited_once()  # still enqueues
 
 
 @pytest.mark.asyncio
 async def test_enqueue_channel_with_client_fires_reaction() -> None:
     """Channel @-mentions fall back to an :eyes: reaction since
     assistant.threads.setStatus only works in assistant threads."""
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
+    fake_enqueue = AsyncMock()
     client = MagicMock()
     client.assistant_threads_setStatus = AsyncMock()
     client.reactions_add = AsyncMock()
 
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -368,10 +336,7 @@ async def test_enqueue_indicator_failure_is_swallowed() -> None:
     still enqueue the agent task -- the indicator is best-effort feedback."""
     from slack_sdk.errors import SlackApiError
 
-    fake_run_agent = MagicMock()
-    fake_module = MagicMock()
-    fake_module.run_agent = fake_run_agent
-
+    fake_enqueue = AsyncMock()
     fake_response = MagicMock()
     fake_response.data = {"error": "missing_scope"}
     client = MagicMock()
@@ -379,7 +344,7 @@ async def test_enqueue_indicator_failure_is_swallowed() -> None:
         side_effect=SlackApiError("nope", fake_response)
     )
 
-    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
             {
                 "team_id": "T1",
@@ -395,7 +360,7 @@ async def test_enqueue_indicator_failure_is_swallowed() -> None:
             client,
         )
 
-    assert fake_run_agent.delay.called
+    fake_enqueue.assert_awaited_once()
 
 
 @pytest.mark.asyncio

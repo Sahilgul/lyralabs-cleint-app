@@ -227,12 +227,14 @@ def _register_event_handlers(app: AsyncApp) -> None:
     async def on_approval_action(ack: Any, body: dict[str, Any]) -> None:
         """User clicked Approve/Reject button on a preview card."""
         await ack()
-        from apps.worker.tasks.run_agent import resume_agent  # noqa: PLC0415  - avoid cycle
+        from lyra_core.worker.queue import enqueue_resume_agent  # noqa: PLC0415
 
         action = body["actions"][0]
         value = action.get("value", "")  # "approve:<job_id>" | "reject:<job_id>"
         decision, _, job_id = value.partition(":")
-        resume_agent.delay(job_id=job_id, decision=decision, user_id=body["user"]["id"])
+        await enqueue_resume_agent(
+            job_id=job_id, decision=decision, user_id=body["user"]["id"]
+        )
 
 
 async def _disable_workspace(team_id: str | None) -> None:
@@ -314,7 +316,7 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     so the user sees feedback within ~100ms instead of waiting for the
     worker to post the real reply (~3-5s).
     """
-    from apps.worker.tasks.run_agent import run_agent  # noqa: PLC0415
+    from lyra_core.worker.queue import enqueue_run_agent  # noqa: PLC0415
 
     event = body.get("event") or {}
     is_dm = event.get("channel_type") == "im"
@@ -401,7 +403,7 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     if client is not None:
         await _post_thinking_indicator(client, msg, is_dm)
 
-    run_agent.delay(message_json=msg.model_dump_json())
+    await enqueue_run_agent(msg.model_dump_json(), event_ts=event_ts_str)
 
 
 async def _post_thinking_indicator(client: Any, msg: InboundMessage, is_dm: bool) -> None:

@@ -70,7 +70,7 @@ services:
     volumes:
       - ../packages:/app/packages
       - ../apps/worker:/app/apps/worker
-    command: ["celery", "-A", "apps.worker.celery_app:celery", "worker", "--loglevel=INFO", "--concurrency=4"]
+    command: ["python", "-m", "arq", "apps.worker.arq_app.WorkerSettings"]
 
   socket_listener:
     # Slack Socket Mode runner for local dev. Stays idle if SLACK_APP_TOKEN

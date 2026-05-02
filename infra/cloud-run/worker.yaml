@@ -56,18 +56,14 @@ spec:
       serviceAccountName: PLACEHOLDER_SA@PLACEHOLDER_PROJECT.iam.gserviceaccount.com
       containers:
         - image: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT/lyralabs/worker:PLACEHOLDER_GIT_SHA
-          # Override the Dockerfile's `CMD exec uvicorn ...` with the Celery
+          # Override the Dockerfile's `CMD exec uvicorn ...` with the arq
           # worker. This is what makes the same image run as a worker instead
           # of an API server.
-          command: ["celery"]
+          command: ["python"]
           args:
-            - "-A"
-            - "apps.worker.celery_app:celery"
-            - "worker"
-            - "-Q"
-            - "agent"
-            - "--concurrency=4"
-            - "--loglevel=INFO"
+            - "-m"
+            - "arq"
+            - "apps.worker.arq_app.WorkerSettings"
           resources:
             limits:
               cpu: "2"

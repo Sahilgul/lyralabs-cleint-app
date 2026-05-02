@@ -1,4 +1,4 @@
-# lyralabs-worker VM stack — Redis + Celery worker + Slack Socket Mode listener
+# lyralabs-worker VM stack — Redis + arq worker + Slack Socket Mode listener
 # on a single GCE e2-small.
 #
 # Layout:
@@ -69,21 +69,17 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
-    # Override the Dockerfile's `CMD exec uvicorn ...` with celery worker.
+    # Override the Dockerfile's `CMD exec uvicorn ...` with arq worker.
     command:
-      - celery
-      - -A
-      - apps.worker.celery_app:celery
-      - worker
-      - -Q
-      - agent
-      - --concurrency=4
-      - --loglevel=INFO
+      - python
+      - -m
+      - arq
+      - apps.worker.arq_app.WorkerSettings
 
   socket_listener:
     # Same image as the worker; just a different process. Inbound Slack
     # events arrive over a persistent WebSocket and are dispatched into
-    # the `agent` Celery queue (consumed by the worker service above).
+    # the arq job queue (consumed by the worker service above).
     # The listener doesn't need a port; all I/O is outbound.
     image: ${WORKER_IMAGE}
     container_name: lyralabs-socket-listener

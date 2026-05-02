@@ -1,4 +1,4 @@
-"""Celery beat task: nightly skill mining (3 AM UTC).
+"""arq cron task: nightly skill mining (3 AM UTC).
 
 Scans audit_events from the last 30 days across all active (tenant, client)
 pairs and promotes repeated tool sequences to the skills table.
@@ -6,22 +6,17 @@ pairs and promotes repeated tool sequences to the skills table.
 
 from __future__ import annotations
 
-import asyncio
-
 from sqlalchemy import text
 
 from lyra_core.agent.skill_crystallizer import mine_and_promote_skills
 from lyra_core.common.logging import get_logger
 from lyra_core.db.session import async_session
 
-from ..celery_app import celery
-
 log = get_logger(__name__)
 
 
-@celery.task(bind=True, name="apps.worker.tasks.crystallize_skills.crystallize_skills")
-def crystallize_skills(self) -> dict:
-    return asyncio.run(_run())
+async def crystallize_skills(ctx: dict) -> dict:
+    return await _run()
 
 
 async def _run() -> dict:
