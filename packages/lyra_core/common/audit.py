@@ -27,9 +27,10 @@ async def record_event(
     session: AsyncSession,
     *,
     tenant_id: str,
-    actor_user_id: str | None,
+    actor_user_id: str | None = None,
     job_id: str | None,
     event_type: str,
+    client_id: str | None = None,
     tool_name: str | None = None,
     args: dict[str, Any] | None = None,
     result_status: str = "ok",
@@ -41,6 +42,7 @@ async def record_event(
     args_hash = _hash_args(args) if args is not None else None
     event = AuditEvent(
         tenant_id=tenant_id,
+        client_id=client_id,
         actor_user_id=actor_user_id,
         job_id=job_id,
         event_type=event_type,
