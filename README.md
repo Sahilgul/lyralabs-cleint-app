@@ -59,7 +59,7 @@ All durably checkpointed in Postgres so an approval pause can survive worker res
 ## Architecture
 
 ```
-       Slack             ┌────────────────────────────┐                Celery worker
+       Slack             ┌────────────────────────────┐                arq worker
    ─── WebSocket ──────► │  socket_listener (VM)      │ ─ enqueue ──► ┌─────────────────────┐
    (Socket Mode,         │  AsyncSocketModeHandler    │               │  apps/worker        │
     persistent,          └────────────────────────────┘               │  run_agent task     │
@@ -106,7 +106,7 @@ All durably checkpointed in Postgres so an approval pause can survive worker res
 | Service           | Tech            | Runs on                                | Responsibility                                                                  |
 | ----------------- | --------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
 | `api`             | FastAPI 0.115   | Cloud Run (`lyralabs-app`)             | OAuth callbacks (Slack, Google, GHL), Stripe webhooks, admin REST API. Also serves `/slack/events` as an HTTPS fallback if Socket Mode is disabled. |
-| `worker`          | Celery 5.4      | GCE VM (`lyralabs-worker`, `e2-small`) | Run the LangGraph agent for each enqueued user request; resume on approval.    |
+| `worker`          | arq 0.26        | GCE VM (`lyralabs-worker`, `e2-small`) | Run the LangGraph agent for each enqueued user request; resume on approval.    |
 | `socket_listener` | slack_bolt async | Same VM, sidecar container            | Maintain the persistent Slack Socket Mode WebSocket and enqueue `run_agent` tasks. Idle-no-op when `SLACK_APP_TOKEN` is empty so deploys without the token don't crash-loop. |
 
 All three services share **one Docker image** built from the root `Dockerfile` —
@@ -114,7 +114,7 @@ they're just three different commands. The VM hosts the Redis broker
 (`lyralabs-redis`) that all three talk to (see [`infra/vm/`](infra/vm/));
 this hybrid topology keeps OAuth + Stripe webhooks on Cloud Run's
 HTTP-shaped scale-to-N, while the always-on Slack listener and the
-Celery worker live where polling is cheap.
+arq worker live where polling is cheap.
 
 **Why Socket Mode for inbound events.** The HTTPS webhook path retries an
 event up to 3× when a 2xx isn't returned within 3 s, which on Cloud Run
@@ -135,7 +135,7 @@ static site. It calls this API cross-origin; the FastAPI CORS allow-list
 **Backing services**
 
 - Postgres 16 (tenants, users, integrations, jobs, audit, LangGraph checkpoints) — Supabase pooler in prod.
-- Redis 7 (Celery broker + result backend) — self-hosted on the worker VM via `docker compose` (AOF persistence, AUTH password, `allkeys-lru`). Migrate to Upstash / Memorystore later if SLAs demand it.
+- Redis 7 (arq job queue) — self-hosted on the worker VM via `docker compose` (AOF persistence, AUTH password, `allkeys-lru`). Migrate to Upstash / Memorystore later if SLAs demand it.
 - Qdrant (per-tenant vector index) — Qdrant Cloud or self-hosted.
 - Stripe (subscriptions + portal).
 - LiteLLM router — currently Qwen (`dashscope/qwen-max` primary, `dashscope/qwen-turbo` cheap) + OpenAI for embeddings. Anthropic Claude / Gemini Flash are drop-in alternatives via `LLM_PRIMARY_MODEL` / `LLM_CHEAP_MODEL`.
@@ -158,9 +158,9 @@ lyralabs/
 │   │       ├── _state.py          Signed JWT state for OAuth round-trips (used by Google, GHL, and Slack install)
 │   │       ├── google.py          /oauth/google/{install,callback}
 │   │       └── ghl.py             /oauth/ghl/{install,callback}
-│   ├── worker/                    Celery
-│   │   ├── celery_app.py          Celery instance + queue routing
-│   │   └── tasks/run_agent.py     run_agent + resume_agent task entrypoints
+│   ├── worker/                    arq async job queue
+│   │   ├── arq_app.py             WorkerSettings (functions, cron, max_tries, redis_settings)
+│   │   └── tasks/run_agent.py     run_agent + resume_agent async task functions
 │   └── socket_listener/           Slack Socket Mode runner
 │       └── main.py                AsyncSocketModeHandler entrypoint; idle-no-op when SLACK_APP_TOKEN is empty
 │
@@ -192,10 +192,12 @@ lyralabs/
 │       │   ├── google/            drive, docs, sheets, calendar (+ _client builders)
 │       │   ├── ghl/               client, contacts, pipelines, conversations, calendars
 │       │   └── artifacts/         pdf (markdown→HTML→WeasyPrint), chart (Plotly + kaleido)
+│       ├── worker/
+│       │   └── queue.py           enqueue_run_agent / enqueue_resume_agent (arq pool helpers)
 │       └── agent/
 │           ├── state.py           AgentState TypedDict + Plan / PlanStep / StepResult
 │           ├── memory.py          4-tier memory (workspace facts cached 30 s + Qdrant collection)
-│           ├── checkpointer.py    LangGraph Postgres checkpointer wrapper
+│           ├── checkpointer.py    LangGraph Postgres checkpointer wrapper (process-scoped pool singleton)
 │           ├── graph.py           Wires the StateGraph
 │           └── nodes/             agent (with history-trim), tool_node, approval, executor, critic, artifact
 │
@@ -508,7 +510,7 @@ Every setting is loaded from environment variables via `pydantic-settings` in `p
 | -------------------------------- | -------- | -------------------------------------------------------------------- |
 | `MASTER_ENCRYPTION_KEY`          | ✅       | Base64 Fernet key. **Generate via `make gen-key`. Rotate via `reencrypt_with_rotation`.** |
 | `DATABASE_URL` / `..._SYNC`      | ✅       | asyncpg + psycopg variants for app + Alembic.                        |
-| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | ✅ | Redis URLs. In prod both point at the worker VM's Redis (see [`infra/vm/`](infra/vm/)). Locally docker-compose wires `redis://redis:6379/0`. |
+| `CELERY_BROKER_URL` | ✅ | Redis URL for the arq job queue. In prod points at the worker VM's Redis. Locally docker-compose wires `redis://redis:6379/1`. |
 | `DASHSCOPE_API_KEY`              | ✅       | Primary + cheap tier (Qwen via DashScope).                           |
 | `OPENAI_API_KEY`                 | ✅       | Embeddings (`text-embedding-3-small`) — no chat usage on the MVP path.|
 | `LLM_PRIMARY_MODEL`              |          | Default `dashscope/qwen-max`. Any LiteLLM-supported model.           |
@@ -524,7 +526,7 @@ Every setting is loaded from environment variables via `pydantic-settings` in `p
 | `ADMIN_BASE_URL`                 | ✅       | Origin of the deployed admin UI (added to CORS allow-list).          |
 | `QDRANT_URL/API_KEY`             | ⚠️       | Only needed when you wire RAG.                                       |
 
-`APP_ENV=test` flips Celery into eager mode, so unit tests run synchronously without a broker.
+`APP_ENV=test` is read by pytest fixtures; arq task functions are plain `async def` so tests call them directly without a broker.
 
 `LLM_PRIMARY_MODEL` / `LLM_CHEAP_MODEL` are now **bootstrap-only** — once an operator configures providers via the super-admin UI (`/admin/llm/...`), the runtime values in Postgres take over. See the next section.
 
@@ -617,7 +619,7 @@ make test-coverage                # with coverage report
 | `tools/artifacts/*` (pdf markdown, charts)                      |    18 |
 | `agent/` (state, memory + cache, all 7 nodes, graph wiring)     |    67 |
 | `apps/api/*` (oauth state/google/ghl, admin auth+routes, admin_llm, stripe webhook, main) | 69 |
-| `apps/worker/*` (celery config, run_agent, resume_agent)        |    22 |
+| `apps/worker/*` (arq WorkerSettings, run_agent, resume_agent)   |    25 |
 | **Total**                                                       |  **523** |
 
 ### Test design
@@ -639,18 +641,18 @@ make test-coverage                # with coverage report
 
 ## Deployment
 
-Hybrid topology: the API runs on Cloud Run (HTTP-shaped, scale-to-N) and serves OAuth callbacks + Stripe webhooks + admin REST. The Compute Engine VM hosts three sidecar containers — the Celery worker, the Slack Socket Mode listener, and a self-hosted Redis broker — pull-based and always-on, cheaper than Cloud Run for sustained polling and persistent WebSockets. Same `Dockerfile` for all three processes; only the runtime command differs.
+Hybrid topology: the API runs on Cloud Run (HTTP-shaped, scale-to-N) and serves OAuth callbacks + Stripe webhooks + admin REST. The Compute Engine VM hosts three sidecar containers — the arq worker, the Slack Socket Mode listener, and a self-hosted Redis broker — pull-based and always-on, cheaper than Cloud Run for sustained polling and persistent WebSockets. Same `Dockerfile` for all three processes; only the runtime command differs.
 
 | Service                                | Repo                | Where it runs                                       | Image / build source                                                | Deploy trigger                                                                                                                                                |
 | -------------------------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api`                                  | this repo           | Cloud Run (`lyralabs-app`)                          | `./Dockerfile` (default `CMD` runs uvicorn)                         | Cloud Build trigger on `main` → `gcloud run deploy lyralabs-app`. Min instances ≥ 1 so OAuth callbacks don't cold-start. See [`infra/cloud-run/README.md`](infra/cloud-run/README.md). |
-| `worker` + `socket_listener` + `redis` | this repo           | GCE VM (`lyralabs-worker`, `e2-small`, ~$13/mo)     | `./Dockerfile` (`command` overridden per service)                   | Manual: SSH into VM, run `infra/vm/deploy.sh` (pulls fresh image + recreates all three containers). Watchtower / Cloud Build SSH automation is Sprint 2. See [`infra/vm/README.md`](infra/vm/README.md). |
+| `worker` + `socket_listener` + `redis` | this repo           | GCE VM (`lyralabs-worker`, `e2-small`, ~$13/mo)     | `./Dockerfile` (`command: python -m arq apps.worker.arq_app.WorkerSettings`) | Manual: SSH into VM, run `infra/vm/deploy.sh` (pulls fresh image + recreates all three containers). Watchtower / Cloud Build SSH automation is Sprint 2. See [`infra/vm/README.md`](infra/vm/README.md). |
 | `admin-ui`                             | `lyralabs-admin-ui` | Vercel (`https://lyralabs.vercel.app`)              | `npm run build` (Vercel auto-detected, no Docker)                   | Git push to `main` → Vercel rebuild. `VITE_API_BASE` and other env vars live in the Vercel project settings. Origin must be in `ADMIN_BASE_URL` on this repo. |
 
 Managed dependencies:
 
 - **Postgres** → Supabase pooler (transaction mode for the app, session mode for Alembic).
-- **Redis** → self-hosted on the worker VM (`redis:7-alpine`, AOF persistence, AUTH password, `allkeys-lru` 512 MB cap). Migrate to Upstash / Memorystore if reliability SLAs ever justify it.
+- **Redis** → self-hosted on the worker VM (`redis:7-alpine`, AOF persistence, AUTH password, `allkeys-lru` 512 MB cap). Used as the arq job queue. Migrate to Upstash / Memorystore if reliability SLAs ever justify it.
 - **Qdrant** → Qdrant Cloud or a small Compute Engine VM.
 - **Stripe** → live mode + webhook to `https://<lyralabs-app cloud-run url>/webhooks/stripe`.
 
