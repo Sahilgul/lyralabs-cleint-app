@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import bcrypt
 import jwt
@@ -23,7 +23,7 @@ from httpx import ASGITransport, AsyncClient
 
 from apps.api.admin.auth_routes import _mint_jwt, _TOKEN_TTL_HOURS, router as auth_router
 from lyra_core.common.config import get_settings
-from lyra_core.db.models import AdminUser, Tenant
+from lyra_core.db.models import AdminUser, Client, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,9 @@ def _mock_session_cm(execute_side_effect=None, execute_return=None):
     else:
         s.execute = AsyncMock(return_value=execute_return)
     s.add = MagicMock()
+    s.flush = AsyncMock()
     s.commit = AsyncMock()
+    s.refresh = AsyncMock()
     s.__aenter__ = AsyncMock(return_value=s)
     s.__aexit__ = AsyncMock(return_value=False)
     return s
@@ -74,7 +76,18 @@ def _mock_session_cm(execute_side_effect=None, execute_return=None):
 def _scalar(value):
     r = MagicMock()
     r.scalar_one_or_none.return_value = value
+    r.scalar_one.return_value = value
     return r
+
+
+def _mock_register_sessions(existing_user=None, tenant_for_update=None):
+    """Return two mock sessions for the register endpoint's two DB round-trips."""
+    tenant = tenant_for_update or _make_tenant()
+    # Session 1: check dupe email → None (no dup); add tenant, flush, add user, commit
+    s1 = _mock_session_cm(execute_return=_scalar(existing_user))
+    # Session 2: fetch tenant to update external_team_id
+    s2 = _mock_session_cm(execute_return=_scalar(tenant))
+    return s1, s2
 
 
 # ===========================================================================
@@ -147,105 +160,95 @@ class TestPasswordHashing:
 class TestRegister:
     @pytest.mark.asyncio
     async def test_success_returns_201_with_jwt(self):
-        tenant = _make_tenant("T123")
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
+        s1, s2 = _mock_register_sessions()
 
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
             async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                 r = await c.post("/admin/auth/register", json={
                     "email": "admin@x.com", "password": "securepass",
-                    "passcode": "7172", "team_id": "T123",
+                    "passcode": "7172",
                 })
 
         assert r.status_code == 201
         data = r.json()
         assert data["token_type"] == "bearer"
         claims = _decode(data["access_token"])
-        assert claims["tenant_id"] == tenant.id
         assert claims["email"] == "admin@x.com"
         assert claims["role"] == "owner"
+        assert "tenant_id" in claims
+
+    @pytest.mark.asyncio
+    async def test_tenant_auto_created_no_team_id_required(self):
+        """Registration must succeed without any Slack team_id."""
+        s1, s2 = _mock_register_sessions()
+
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
+            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                r = await c.post("/admin/auth/register", json={
+                    "email": "new@example.com", "password": "securepass", "passcode": "7172",
+                })
+
+        assert r.status_code == 201
 
     @pytest.mark.asyncio
     async def test_email_stored_lowercase(self):
         """Regression: mixed-case email in request must be stored/returned lowercase."""
-        tenant = _make_tenant("T123")
-        stored: list[AdminUser] = []
+        stored: list = []
+        s1, s2 = _mock_register_sessions()
 
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
-        original_add = s.add
-
+        original_add = s1.add
         def capture_add(obj):
             stored.append(obj)
-        s.add = capture_add
+        s1.add = capture_add
 
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
             async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                 r = await c.post("/admin/auth/register", json={
-                    "email": "ADMIN@X.COM", "password": "securepass",
-                    "passcode": "7172", "team_id": "T123",
+                    "email": "ADMIN@X.COM", "password": "securepass", "passcode": "7172",
                 })
 
         assert r.status_code == 201
         claims = _decode(r.json()["access_token"])
         assert claims["email"] == "admin@x.com"
-        assert stored[0].email == "admin@x.com"
+        users = [obj for obj in stored if isinstance(obj, AdminUser)]
+        assert users, "AdminUser was never passed to session.add()"
+        assert users[0].email == "admin@x.com"
 
     @pytest.mark.asyncio
     async def test_wrong_passcode_returns_403(self):
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
             r = await c.post("/admin/auth/register", json={
-                "email": "a@x.com", "password": "securepass",
-                "passcode": "0000", "team_id": "T123",
+                "email": "a@x.com", "password": "securepass", "passcode": "0000",
             })
         assert r.status_code == 403
         assert "passcode" in r.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_unknown_team_id_returns_404(self):
-        s = _mock_session_cm(execute_return=_scalar(None))
-
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "a@x.com", "password": "securepass",
-                    "passcode": "7172", "team_id": "T_GHOST",
-                })
-        assert r.status_code == 404
-
-    @pytest.mark.asyncio
     async def test_duplicate_email_returns_409(self):
-        tenant = _make_tenant("T123")
         existing = _make_user()
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(existing)])
+        s1 = _mock_session_cm(execute_return=_scalar(existing))
 
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
             async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                 r = await c.post("/admin/auth/register", json={
-                    "email": "admin@x.com", "password": "securepass",
-                    "passcode": "7172", "team_id": "T123",
+                    "email": "admin@x.com", "password": "securepass", "passcode": "7172",
                 })
         assert r.status_code == 409
         assert "already registered" in r.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_short_password_returns_422(self):
-        tenant = _make_tenant("T123")
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
-
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "a@x.com", "password": "short",
-                    "passcode": "7172", "team_id": "T123",
-                })
+        async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+            r = await c.post("/admin/auth/register", json={
+                "email": "a@x.com", "password": "short", "passcode": "7172",
+            })
         assert r.status_code == 422
 
     @pytest.mark.asyncio
     async def test_invalid_email_format_returns_422(self):
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
             r = await c.post("/admin/auth/register", json={
-                "email": "not-an-email", "password": "securepass",
-                "passcode": "7172", "team_id": "T123",
+                "email": "not-an-email", "password": "securepass", "passcode": "7172",
             })
         assert r.status_code == 422
 
@@ -258,22 +261,20 @@ class TestRegister:
     @pytest.mark.asyncio
     async def test_password_is_not_stored_in_plaintext(self):
         """Regression: password must be bcrypt-hashed, never stored as plaintext."""
-        tenant = _make_tenant("T123")
-        stored: list[AdminUser] = []
+        stored: list = []
+        s1, s2 = _mock_register_sessions()
+        s1.add = lambda obj: stored.append(obj)
 
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
-        s.add = lambda obj: stored.append(obj)
-
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
             async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                 await c.post("/admin/auth/register", json={
-                    "email": "a@x.com", "password": "mypassword123",
-                    "passcode": "7172", "team_id": "T123",
+                    "email": "a@x.com", "password": "mypassword123", "passcode": "7172",
                 })
 
-        assert stored, "AdminUser was never passed to session.add()"
-        assert "mypassword123" not in stored[0].password_hash
-        assert bcrypt.checkpw(b"mypassword123", stored[0].password_hash.encode())
+        users = [obj for obj in stored if isinstance(obj, AdminUser)]
+        assert users, "AdminUser was never passed to session.add()"
+        assert "mypassword123" not in users[0].password_hash
+        assert bcrypt.checkpw(b"mypassword123", users[0].password_hash.encode())
 
 
 # ===========================================================================
@@ -369,18 +370,16 @@ class TestLogin:
 
 class TestRegressions:
     @pytest.mark.asyncio
-    async def test_register_does_not_reveal_whether_email_exists_in_error_body(self):
+    async def test_register_does_not_reveal_account_info_on_409(self):
         """The 409 detail says 'already registered' but must NOT expose the
         existing user's tenant or any other account info."""
-        tenant = _make_tenant()
         existing = _make_user()
-        s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(existing)])
+        s1 = _mock_session_cm(execute_return=_scalar(existing))
 
-        with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
             async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                 r = await c.post("/admin/auth/register", json={
-                    "email": "admin@x.com", "password": "pass1234",
-                    "passcode": "7172", "team_id": "T123",
+                    "email": "admin@x.com", "password": "pass1234", "passcode": "7172",
                 })
         assert r.status_code == 409
         body = r.json()["detail"]
@@ -411,6 +410,28 @@ class TestRegressions:
     def test_passcode_default_is_7172(self):
         """Regression: the default passcode must stay 7172 until explicitly changed."""
         assert get_settings().admin_register_passcode == "7172"
+
+    @pytest.mark.asyncio
+    async def test_pending_tenant_external_id_set_on_register(self):
+        """Tenant created during registration must have external_team_id starting with 'pending-'."""
+        created_tenants: list[Tenant] = []
+        s1, s2 = _mock_register_sessions()
+
+        original_add = s1.add
+        def capture_add(obj):
+            if isinstance(obj, Tenant):
+                created_tenants.append(obj)
+        s1.add = capture_add
+
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
+            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                r = await c.post("/admin/auth/register", json={
+                    "email": "sahil@agency.com", "password": "securepass", "passcode": "7172",
+                })
+
+        assert r.status_code == 201
+        assert created_tenants, "No Tenant was created"
+        assert created_tenants[0].external_team_id.startswith("pending-")
 
 
 # ===========================================================================
@@ -475,7 +496,6 @@ class TestConcurrentLoad:
         """Login and register running simultaneously must not interfere with
         each other's session mocks or response state."""
         user = _make_user(email="login@x.com", password="loginpass")
-        tenant = _make_tenant("T999")
 
         async def do_login():
             s = _mock_session_cm(execute_return=_scalar(user))
@@ -487,12 +507,11 @@ class TestConcurrentLoad:
             return ("login", r.status_code)
 
         async def do_register():
-            s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
-            with patch("apps.api.admin.auth_routes.async_session", return_value=s):
+            s1, s2 = _mock_register_sessions()
+            with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
                 async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
                     r = await c.post("/admin/auth/register", json={
-                        "email": "new@x.com", "password": "newpassword",
-                        "passcode": "7172", "team_id": "T999",
+                        "email": "new@x.com", "password": "newpassword", "passcode": "7172",
                     })
             return ("register", r.status_code)
 
@@ -510,24 +529,23 @@ class TestConcurrentLoad:
         """Simulates 10 concurrent requests trying to register the same email.
         The mock returns existing=None for the first, existing=user for the rest,
         matching what the DB would do after the first write commits."""
-        tenant = _make_tenant("T123")
         existing = _make_user()
 
-        call_count = 0
-
         async def do_register(is_first: bool):
-            nonlocal call_count
             if is_first:
-                s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(None)])
+                s1, s2 = _mock_register_sessions()
+                with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
+                    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                        r = await c.post("/admin/auth/register", json={
+                            "email": "admin@x.com", "password": "securepass", "passcode": "7172",
+                        })
             else:
-                s = _mock_session_cm(execute_side_effect=[_scalar(tenant), _scalar(existing)])
-
-            with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    r = await c.post("/admin/auth/register", json={
-                        "email": "admin@x.com", "password": "securepass",
-                        "passcode": "7172", "team_id": "T123",
-                    })
+                s1 = _mock_session_cm(execute_return=_scalar(existing))
+                with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
+                    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                        r = await c.post("/admin/auth/register", json={
+                            "email": "admin@x.com", "password": "securepass", "passcode": "7172",
+                        })
             return r.status_code
 
         tasks = [do_register(i == 0) for i in range(10)]
@@ -535,3 +553,90 @@ class TestConcurrentLoad:
 
         assert results[0] == 201, "First registration should succeed"
         assert all(s == 409 for s in results[1:]), f"Subsequent should be 409: {results[1:]}"
+
+
+# ===========================================================================
+# BEHAVIOR TESTS — GET /admin/auth/slack-install-url
+# ===========================================================================
+
+class TestSlackInstallUrl:
+    @pytest.mark.asyncio
+    async def test_requires_auth(self):
+        async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+            r = await c.get("/admin/auth/slack-install-url")
+        assert r.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_signed_url_for_authenticated_tenant(self):
+        from apps.api.oauth._state import decode_state
+
+        token = _mint_jwt("tenant-xyz", "owner@x.com", "owner")
+        async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+            r = await c.get("/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"})
+
+        assert r.status_code == 200
+        url = r.json()["url"]
+        assert "/oauth/slack/install" in url
+        assert "sig=" in url
+
+        # The sig must be a verifiable JWT containing the correct tenant_id.
+        sig = url.split("sig=")[1]
+        tenant_id, _ = decode_state(sig)
+        assert tenant_id == "tenant-xyz"
+
+    @pytest.mark.asyncio
+    async def test_sig_expires_within_state_ttl(self):
+        import time as time_mod
+        from apps.api.oauth._state import decode_state
+
+        token = _mint_jwt("t-ttl", "a@x.com", "owner")
+        async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+            r = await c.get("/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"})
+
+        import time as time_mod
+        sig = r.json()["url"].split("sig=")[1]
+        settings = get_settings()
+        claims = jwt.decode(sig, settings.admin_jwt_secret, algorithms=["HS256"], issuer=settings.admin_jwt_issuer)
+        remaining = claims["exp"] - int(time_mod.time())
+        assert 0 < remaining <= 600  # encode_state uses 600-second TTL
+
+
+# ===========================================================================
+# BEHAVIOR TESTS — registration creates agency_internal Client
+# ===========================================================================
+
+class TestRegisterCreatesClient:
+    @pytest.mark.asyncio
+    async def test_agency_internal_client_created_with_tenant(self):
+        """Registration must create a Client(slug='agency_internal') in the same transaction."""
+        added_objects: list = []
+        s1, s2 = _mock_register_sessions()
+        s1.add = lambda obj: added_objects.append(obj)
+
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
+            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                r = await c.post("/admin/auth/register", json={
+                    "email": "agency@example.com", "password": "securepass", "passcode": "7172",
+                })
+
+        assert r.status_code == 201
+        clients = [obj for obj in added_objects if isinstance(obj, Client)]
+        assert clients, "No Client was created during registration"
+        assert clients[0].slug == "agency_internal"
+        assert clients[0].status == "active"
+
+    @pytest.mark.asyncio
+    async def test_client_name_matches_email_username(self):
+        """The synthetic client name should be the email username part."""
+        added_objects: list = []
+        s1, s2 = _mock_register_sessions()
+        s1.add = lambda obj: added_objects.append(obj)
+
+        with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
+            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
+                await c.post("/admin/auth/register", json={
+                    "email": "tehreem@agency.com", "password": "securepass", "passcode": "7172",
+                })
+
+        clients = [obj for obj in added_objects if isinstance(obj, Client)]
+        assert clients[0].name == "tehreem"

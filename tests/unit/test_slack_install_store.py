@@ -76,6 +76,96 @@ async def test_ensure_tenant_creates_when_missing(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ensure_tenant_links_pending_when_hint_given(monkeypatch) -> None:
+    """When tenant_id_hint points to a pending tenant, update its external_team_id."""
+    from lyra_core.channels.slack import install_store as mod
+
+    pending = Tenant(
+        external_team_id="pending-user-uuid-1", channel="slack", name="sahil", plan="trial", status="active"
+    )
+    pending.id = "pending-tenant-uuid"
+    committed: dict = {}
+
+    _execute_calls = 0
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def execute(self, _stmt):
+            nonlocal _execute_calls
+            r = MagicMock()
+            # First query: look up by team_id → not found
+            # Second query: look up by tenant_id_hint → pending tenant
+            r.scalar_one_or_none.return_value = None if _execute_calls == 0 else pending
+            _execute_calls += 1
+            return r
+
+        def add(self, obj):
+            raise AssertionError("should not create new tenant when hint resolves")
+
+        async def commit(self):
+            committed["external_team_id"] = pending.external_team_id
+
+    monkeypatch.setattr(mod, "async_session", FakeSession)
+    tid = await PostgresInstallationStore._ensure_tenant("T_REAL", "Acme Team", tenant_id_hint="pending-tenant-uuid")
+
+    assert tid == "pending-tenant-uuid"
+    assert pending.external_team_id == "T_REAL"
+    assert pending.name == "Acme Team"
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_creates_new_when_hint_not_pending(monkeypatch) -> None:
+    """If hint points to an already-connected tenant (non-pending), fall through to create."""
+    from lyra_core.channels.slack import install_store as mod
+
+    real_tenant = Tenant(
+        external_team_id="T_ALREADY", channel="slack", name="Other", plan="trial", status="active"
+    )
+    real_tenant.id = "real-tenant-uuid"
+    captured: dict = {}
+
+    call_count = 0
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def execute(self, _stmt):
+            nonlocal call_count
+            r = MagicMock()
+            if call_count == 0:
+                r.scalar_one_or_none.return_value = None  # team_id not found
+            else:
+                r.scalar_one_or_none.return_value = real_tenant  # hint resolves but not pending
+            call_count += 1
+            return r
+
+        def add(self, obj):
+            captured["added"] = obj
+
+        async def commit(self):
+            captured["committed"] = True
+
+        async def refresh(self, obj):
+            obj.id = "new-uuid-fallback"
+
+    monkeypatch.setattr(mod, "async_session", FakeSession)
+    tid = await PostgresInstallationStore._ensure_tenant("T_NEW", "New Team", tenant_id_hint="real-tenant-uuid")
+
+    assert tid == "new-uuid-fallback"
+    assert isinstance(captured.get("added"), Tenant)
+    assert captured["added"].external_team_id == "T_NEW"
+
+
+@pytest.mark.asyncio
 async def test_ensure_tenant_returns_existing_id(monkeypatch) -> None:
     from lyra_core.channels.slack import install_store as mod
 
