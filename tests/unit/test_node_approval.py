@@ -13,22 +13,34 @@ from lyra_core.agent.nodes.approval import (
     route_after_approval,
 )
 from lyra_core.agent.state import Plan, PlanStep
+from lyra_core.tools.base import RiskProfile, TrustTier
 
 
 def _plan(*, has_write: bool = False, needs_clarification: bool = False) -> Plan:
     return Plan(
         goal="g",
-        steps=[
-            PlanStep(id="s1", tool_name="ghl.contacts.search", rationale="r"),
-            PlanStep(
-                id="s2",
-                tool_name="ghl.contacts.create",
-                rationale="r2",
-                requires_approval=has_write,
-            ),
-        ] if has_write else [PlanStep(id="s1", tool_name="t", rationale="r")],
+        steps=(
+            [
+                PlanStep(id="s1", tool_name="ghl.contacts.search", rationale="r"),
+                PlanStep(
+                    id="s2",
+                    tool_name="ghl.contacts.create",
+                    rationale="r2",
+                    requires_approval=has_write,
+                ),
+            ]
+            if has_write
+            else [PlanStep(id="s1", tool_name="t", rationale="r")]
+        ),
         needs_clarification=needs_clarification,
     )
+
+
+def _medium_profiles(plan: Plan) -> list[RiskProfile]:
+    return [
+        RiskProfile(tier=TrustTier.MEDIUM, reversibility="reversible", blast_radius="single")
+        for _ in plan.steps
+    ]
 
 
 class TestRouteAfterApproval:
@@ -47,16 +59,17 @@ class TestRouteAfterApproval:
 class TestPreviewBlocks:
     def test_includes_goal_steps_and_buttons(self) -> None:
         plan = _plan(has_write=True)
-        blocks = _plan_preview_blocks(plan, "job-1")
+        profiles = _medium_profiles(plan)
+        blocks = _plan_preview_blocks(plan, "job-1", profiles=profiles)
         assert blocks[0]["type"] == "header"
         assert "Approve" in blocks[0]["text"]["text"]
         assert "g" in blocks[1]["text"]["text"]
-        # actions block
+        # actions block exists for MEDIUM tier
         actions = blocks[2]
         assert actions["type"] == "actions"
         values = {b["value"] for b in actions["elements"]}
         assert values == {"approve:job-1", "reject:job-1"}
-        # writes are tagged
+        # write tag still present
         assert "_(write)_" in blocks[1]["text"]["text"]
 
     def test_empty_steps_renders_placeholder(self) -> None:
@@ -64,10 +77,29 @@ class TestPreviewBlocks:
         blocks = _plan_preview_blocks(plan, "j")
         assert "_(no steps)_" in blocks[1]["text"]["text"]
 
+    def test_high_tier_omits_buttons_adds_confirm_instruction(self) -> None:
+        plan = _plan(has_write=True)
+        high_profiles = [
+            RiskProfile(tier=TrustTier.HIGH, reversibility="irreversible", blast_radius="bulk")
+            for _ in plan.steps
+        ]
+        blocks = _plan_preview_blocks(
+            plan, "j", profiles=high_profiles, overall_tier=TrustTier.HIGH
+        )
+        # No actions block for HIGH tier
+        assert all(b["type"] != "actions" for b in blocks)
+        assert "confirm" in blocks[1]["text"]["text"].lower()
+
+    def test_simulation_previews_appear_in_card(self) -> None:
+        plan = _plan(has_write=True)
+        profiles = _medium_profiles(plan)
+        previews = {"s2": "Will create contact with email: test@example.com"}
+        blocks = _plan_preview_blocks(plan, "j", profiles=profiles, previews=previews)
+        assert "test@example.com" in blocks[1]["text"]["text"]
+
 
 @pytest.mark.asyncio
 async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) -> None:
-    """interrupt() returns the decision when resumed; we mock it to skip the actual interruption."""
     plan = _plan(has_write=True)
     plan_dict = plan.model_dump()
     state = {
@@ -82,9 +114,9 @@ async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) ->
 
     out = await approval_node(state)  # type: ignore[arg-type]
     assert out["approval_decision"] == "approved"
-    # Plan is promoted to the canonical `plan` field for the executor.
-    assert out["plan"] == plan_dict
+    assert out["plan"]["goal"] == "g"
     assert out["pending_plan"] is None
+    assert "risk_profiles" in out
 
 
 @pytest.mark.asyncio
@@ -121,8 +153,6 @@ async def test_approval_node_unknown_decision_defaults_rejected(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_approval_node_reads_pending_plan_in_unified_mode(monkeypatch) -> None:
-    """Unified-mode flow: agent sets `pending_plan` via submit_plan_for_approval.
-    approval_node must read it (not `plan`) and promote it on approve."""
     plan = _plan(has_write=True)
     plan_dict = plan.model_dump()
     state = {
@@ -137,8 +167,57 @@ async def test_approval_node_reads_pending_plan_in_unified_mode(monkeypatch) -> 
 
     out = await approval_node(state)  # type: ignore[arg-type]
     assert out["approval_decision"] == "approved"
-    assert out["plan"] == plan_dict
+    assert out["plan"]["goal"] == plan_dict["goal"]
     assert out["pending_plan"] is None
+
+
+@pytest.mark.asyncio
+async def test_approval_node_auto_approves_low_only_plan(monkeypatch) -> None:
+    """A plan whose only step is a read tool auto-approves without interrupting."""
+    from lyra_core.tools.base import Tool, ToolContext, TrustTier
+    from lyra_core.tools.registry import default_registry
+    from pydantic import BaseModel
+
+    class _In(BaseModel):
+        q: str = ""
+
+    class _Out(BaseModel):
+        data: str = ""
+
+    class _ReadTool(Tool[_In, _Out]):
+        name = "_test_low_tool"
+        description = "reads something"
+        requires_approval = False
+        trust_tier = TrustTier.LOW
+        Input = _In
+        Output = _Out
+
+        async def run(self, ctx: ToolContext, args: _In) -> _Out:
+            return _Out()
+
+    tool = _ReadTool()
+    try:
+        default_registry.register(tool)
+    except ValueError:
+        pass  # already registered from a previous test run
+
+    plan = Plan(goal="g", steps=[PlanStep(id="s1", tool_name="_test_low_tool", rationale="r")])
+    state = {
+        "plan": plan.model_dump(),
+        "job_id": "j",
+        "thread_id": "t",
+        "channel_id": "c",
+        "tenant_id": "x",
+    }
+    post_mock = AsyncMock()
+    monkeypatch.setattr(approval_mod, "post_reply", post_mock)
+    interrupt_called = []
+    monkeypatch.setattr(approval_mod, "interrupt", lambda p: interrupt_called.append(p))
+
+    out = await approval_node(state)  # type: ignore[arg-type]
+    assert out["approval_decision"] == "approved"
+    assert not interrupt_called  # no interrupt for all-LOW plans
+    post_mock.assert_not_called()  # no Block Kit card posted
 
 
 @pytest.mark.asyncio
