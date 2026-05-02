@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import logging
 from unittest.mock import MagicMock
 
@@ -72,3 +74,86 @@ def test_configure_logging_invalid_level_falls_back_to_info(monkeypatch) -> None
 
 def test_get_logger_with_no_name() -> None:
     assert get_logger() is not None
+
+
+# -----------------------------------------------------------------------------
+# phase() / phase_sync() / context binding
+# -----------------------------------------------------------------------------
+
+
+def test_phase_emits_start_and_end_with_duration_ms(monkeypatch) -> None:
+    """`phase()` must log a phase.start, then phase.end with duration_ms."""
+    events: list[tuple[str, dict]] = []
+
+    fake_logger = MagicMock()
+    fake_logger.info = lambda evt, **fields: events.append((evt, fields))
+    fake_logger.warning = lambda evt, **fields: events.append((evt, fields))
+
+    monkeypatch.setattr(log_mod, "_phase_log", fake_logger)
+
+    async def run():
+        async with log_mod.phase("test.op", foo="bar"):
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+    assert [e[0] for e in events] == ["phase.start", "phase.end"]
+    start_fields = events[0][1]
+    end_fields = events[1][1]
+    assert start_fields["phase"] == "test.op"
+    assert start_fields["foo"] == "bar"
+    assert end_fields["phase"] == "test.op"
+    assert end_fields["phase_ok"] is True
+    assert isinstance(end_fields["duration_ms"], int)
+    assert end_fields["duration_ms"] >= 0
+
+
+def test_phase_records_failure_and_reraises(monkeypatch) -> None:
+    events: list[tuple[str, dict]] = []
+    fake_logger = MagicMock()
+    fake_logger.info = lambda evt, **fields: events.append((evt, fields))
+    fake_logger.warning = lambda evt, **fields: events.append((evt, fields))
+
+    monkeypatch.setattr(log_mod, "_phase_log", fake_logger)
+
+    async def run():
+        async with log_mod.phase("test.crash"):
+            raise ValueError("boom")
+
+    try:
+        asyncio.run(run())
+    except ValueError as exc:
+        assert str(exc) == "boom"
+    else:
+        raise AssertionError("phase did not re-raise")
+
+    end_evt, end_fields = events[-1]
+    assert end_evt == "phase.end"
+    assert end_fields["phase_ok"] is False
+    assert end_fields["error"] == "ValueError"
+
+
+def test_bind_and_clear_job_context_use_contextvars(monkeypatch) -> None:
+    """`bind_job_context` should set fields on structlog's contextvars
+    bag; `clear_job_context` should reset them."""
+    log_mod.clear_job_context()
+    log_mod.bind_job_context(job_id="j-1", thread_id="t-1", custom="x")
+    bag = structlog.contextvars.get_contextvars()
+    assert bag.get("job_id") == "j-1"
+    assert bag.get("thread_id") == "t-1"
+    assert bag.get("custom") == "x"
+
+    log_mod.clear_job_context()
+    bag = structlog.contextvars.get_contextvars()
+    assert "job_id" not in bag
+    assert "thread_id" not in bag
+
+
+def test_bind_job_context_drops_none_values() -> None:
+    log_mod.clear_job_context()
+    log_mod.bind_job_context(job_id="j-1", thread_id=None, tenant_id=None)
+    bag = structlog.contextvars.get_contextvars()
+    assert bag.get("job_id") == "j-1"
+    assert "thread_id" not in bag
+    assert "tenant_id" not in bag
+    log_mod.clear_job_context()

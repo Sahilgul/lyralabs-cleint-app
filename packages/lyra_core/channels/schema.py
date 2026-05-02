@@ -26,9 +26,24 @@ class InboundMessage(BaseModel):
     channel_id: str
     thread_id: str = Field(
         description=(
-            "Conversation key for the agent's checkpointer. Slack: thread_ts or "
-            "the message ts (so each new top-level message starts a fresh agent "
-            "conversation). NOT the same as `reply_thread_ts`."
+            "Slack-side conversation key (thread_ts when the user is in a thread, "
+            "else the message ts). Used for audit/debugging and to derive "
+            "`assistant_status_thread_ts`. NOT the agent's checkpointer key -- "
+            "see `agent_thread_id` for that."
+        )
+    )
+    agent_thread_id: str = Field(
+        description=(
+            "Stable LangGraph checkpointer key for this conversation. "
+            "DM:    'slack:dm:{team}:{channel}:{user}'   -- one continuous agent "
+            "       memory per DM partner; survives across top-level messages "
+            "       (the user's natural mental model of a DM with a coworker). "
+            "Thread:'slack:ch:{team}:{channel}:{thread_ts}' -- one agent memory "
+            "       per Slack thread; new threads are independent conversations. "
+            "Top-level channel @-mention: same form as Thread, keyed on the "
+            "       message ts (the bot will reply threaded under it). "
+            "This is independent of `reply_thread_ts` (the Slack threading the "
+            "bot uses when posting), which stays a UX choice."
         )
     )
     user_id: str = Field(description="Platform user id")

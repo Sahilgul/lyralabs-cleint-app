@@ -72,6 +72,24 @@ services:
       - ../apps/worker:/app/apps/worker
     command: ["celery", "-A", "apps.worker.celery_app:celery", "worker", "--loglevel=INFO", "--concurrency=4"]
 
+  socket_listener:
+    # Slack Socket Mode runner for local dev. Stays idle if SLACK_APP_TOKEN
+    # is empty so you can run the stack without a workspace install.
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: lyralabs-socket-listener
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../packages:/app/packages
+      - ../apps/socket_listener:/app/apps/socket_listener
+    command: ["python", "-m", "apps.socket_listener.main"]
+
 volumes:
   postgres_data:
   qdrant_data:

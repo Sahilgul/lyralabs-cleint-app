@@ -10,6 +10,7 @@ Outbound flow:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from slack_bolt.adapter.starlette.async_handler import AsyncSlackRequestHandler
@@ -29,6 +30,8 @@ log = get_logger(__name__)
 def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
     """Construct the Bolt app + a Starlette/FastAPI request handler.
 
+    Used by the HTTPS webhook (POST /slack/events on Cloud Run). For
+    Socket Mode the runner builds its own variant via `build_socket_mode_app`.
     If SLACK_* env vars are not set (e.g. local boot without secrets) we
     construct a minimal app so the FastAPI process can still come up; OAuth
     routes will return 500 until creds are configured.
@@ -78,19 +81,55 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
             process_before_response=False,
         )
 
+    _register_http_retry_middleware(app)
+    _register_event_handlers(app)
+    return app, AsyncSlackRequestHandler(app)
+
+
+def build_socket_mode_app() -> AsyncApp:
+    """Build a Bolt app wired for Socket Mode.
+
+    Differences from `build_slack_app`:
+      - No OAuthSettings -- OAuth still runs over HTTPS via build_slack_app
+        on the API service. The Socket Mode app is INBOUND-ONLY and uses
+        the multi-tenant `PostgresInstallationStore` directly to authorize
+        each event.
+      - No HTTP retry middleware -- Socket Mode doesn't use Slack's
+        3-second-retry mechanism (events are delivered over a persistent
+        WebSocket; there's no HTTP status to fail on).
+      - Caller is responsible for wrapping this in `AsyncSocketModeHandler`
+        and passing it the App-Level Token.
+    """
+    settings = get_settings()
+    if not settings.slack_signing_secret:
+        log.warning(
+            "slack.socket.signing_secret_missing",
+            reason="continuing with placeholder; signature verification disabled",
+        )
+    app = AsyncApp(
+        signing_secret=settings.slack_signing_secret or "missing",
+        installation_store=PostgresInstallationStore(),
+        process_before_response=False,
+    )
+    _register_event_handlers(app)
+    return app
+
+
+def _register_http_retry_middleware(app: AsyncApp) -> None:
+    """Short-circuit Slack's automatic event retries on the HTTPS path.
+
+    Slack retries an event up to 3x if it doesn't see a 2xx within 3s.
+    Even with process_before_response=False we still get retries when
+    Cloud Run cold-starts or under transient slowness. Without
+    deduplication, every retry enqueues another `run_agent` task for
+    the same user message -- that's why we previously saw 4 task IDs
+    for a single DM, all replying into the same Slack thread.
+
+    Socket Mode has no such retry mechanism, so this middleware is HTTP-only.
+    """
+
     @app.middleware
     async def _drop_slack_retries(request, next_):  # type: ignore[no-untyped-def]  # noqa: ANN001
-        """Short-circuit Slack's automatic event retries.
-
-        Slack retries an event up to 3x if it doesn't see a 2xx within 3s.
-        Even with process_before_response=False we still get retries when
-        Cloud Run cold-starts or under transient slowness. Without
-        deduplication, every retry enqueues another `run_agent` task for
-        the same user message -- that's why we previously saw 4 task IDs
-        for a single DM, all replying into the same Slack thread.
-        Acking 200 here on retry headers tells Slack we got it, and we
-        don't kick off duplicate work.
-        """
         retry_num = request.headers.get("x-slack-retry-num")
         if retry_num:
             log.info(
@@ -107,6 +146,15 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
             # eventually marks the endpoint as flaky).
             return BoltResponse(status=200, body="")
         await next_()
+
+
+def _register_event_handlers(app: AsyncApp) -> None:
+    """Register every inbound Slack event/action handler on `app`.
+
+    Shared between the HTTP webhook and the Socket Mode runner so the two
+    transports stay behaviorally identical -- DMs, mentions, slash commands,
+    approval clicks, and uninstalls all fan into the same Celery tasks.
+    """
 
     @app.event("app_mention")
     async def on_mention(body: dict[str, Any], ack: Any, say: Any, client: Any) -> None:
@@ -165,8 +213,6 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
         decision, _, job_id = value.partition(":")
         resume_agent.delay(job_id=job_id, decision=decision, user_id=body["user"]["id"])
 
-    return app, AsyncSlackRequestHandler(app)
-
 
 async def _disable_workspace(team_id: str | None) -> None:
     """Mark the tenant inactive and zero out the bot token on uninstall/revoke."""
@@ -195,16 +241,26 @@ async def _disable_workspace(team_id: str | None) -> None:
 async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     """Translate a Slack event into InboundMessage + dispatch to Celery.
 
-    Threading rules (so the DM UX stays linear and channel mentions stay tidy):
-      - DM, top-level message  -> reply as a new top-level message (no thread_ts).
-      - DM, reply inside thread -> reply in that same thread.
-      - Channel @-mention top-level -> reply threaded on the user's message.
-      - Channel reply inside thread -> reply in that same thread.
+    Reply-threading rules (so the UX matches Slack conventions):
+      - DM, top-level message     -> reply as a new top-level message (no thread_ts).
+      - DM, reply inside thread   -> reply in that same thread.
+      - Channel @-mention top-lvl -> reply threaded on the user's message.
+      - Channel reply in a thread -> reply in that same thread.
 
-    The agent's checkpointer key (`thread_id`) is independent: we use
-    thread_ts when present, else the message ts, so each new top-level
-    user message starts a fresh agent conversation rather than leaking
-    state from the previous one.
+    Agent-memory rules (the `agent_thread_id` keying the LangGraph checkpointer):
+      - DM   -> 'slack:dm:{team}:{channel}:{user}' -- the entire DM with this
+                user is ONE continuous agent conversation. Top-level DM
+                messages share memory (e.g. user says "my name is sahil"
+                in one message, then asks "what's my name?" in the next
+                top-level message; ARLO remembers).
+      - Thread / channel @-mention -> 'slack:ch:{team}:{channel}:{thread_ts}'
+                where thread_ts is the Slack thread root ts (or the message
+                ts itself for a fresh top-level mention). One thread = one
+                conversation. New threads are independent.
+
+    This is intentionally independent of `reply_thread_ts`: how the bot
+    threads its replies is a UX choice, but how the agent remembers
+    context should not be coupled to it.
 
     If `client` is provided we also fire a "Thinking…" status indicator
     so the user sees feedback within ~100ms instead of waiting for the
@@ -216,6 +272,9 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     is_dm = event.get("channel_type") == "im"
     slack_thread_ts: str | None = event.get("thread_ts")
     slack_msg_ts: str | None = event.get("ts")
+    team_id: str = body.get("team_id") or body.get("api_app_id") or ""
+    channel_id: str = event.get("channel", "")
+    user_id: str = event.get("user", "")
 
     if slack_thread_ts:
         reply_thread_ts: str | None = slack_thread_ts
@@ -224,12 +283,26 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     else:
         reply_thread_ts = slack_msg_ts
 
+    if is_dm:
+        # One continuous LangGraph thread per (team, DM-channel, user). The
+        # DM channel already encodes the bot<->user pair, but we still
+        # include user_id explicitly so the same key would work in a
+        # multi-party DM (mpim) without leaking memory across participants.
+        agent_thread_id = f"slack:dm:{team_id}:{channel_id}:{user_id}"
+    else:
+        # Channel: scope memory to the Slack thread root. A brand-new
+        # @-mention with no thread_ts uses its own ts as the root, which
+        # matches how the bot will reply (threaded under that message).
+        thread_root = slack_thread_ts or slack_msg_ts or ""
+        agent_thread_id = f"slack:ch:{team_id}:{channel_id}:{thread_root}"
+
     msg = InboundMessage(
         surface=Surface.SLACK,
-        tenant_external_id=body.get("team_id") or body.get("api_app_id") or "",
-        channel_id=event.get("channel", ""),
+        tenant_external_id=team_id,
+        channel_id=channel_id,
         thread_id=slack_thread_ts or slack_msg_ts or "",
-        user_id=event.get("user", ""),
+        agent_thread_id=agent_thread_id,
+        user_id=user_id,
         text=(event.get("text") or "").strip(),
         files=event.get("files", []),
         reply_thread_ts=reply_thread_ts,
@@ -238,13 +311,29 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     )
     if not msg.text:
         return
+
+    # `event_ts` is when Slack first saw the user's message. The gap
+    # between that and `now` is "ingress lag": webhook hop + Bolt
+    # signature-verify + our handler -- a useful upper bound on how
+    # much time we can shave from the inbound path before the agent
+    # even starts. In Socket Mode this lag drops near zero; on HTTPS
+    # it's where Cloud Run cold starts show up.
+    event_ts_str: str | None = event.get("event_ts") or slack_msg_ts
+    ingress_lag_ms: int | None = None
+    if event_ts_str:
+        try:
+            ingress_lag_ms = int((time.time() - float(event_ts_str)) * 1000)
+        except (TypeError, ValueError):
+            ingress_lag_ms = None
     log.info(
         "slack.event.enqueue",
         tenant=msg.tenant_external_id,
-        thread=msg.thread_id,
+        slack_thread=msg.thread_id,
+        agent_thread=msg.agent_thread_id,
         reply_thread=reply_thread_ts or "(top-level)",
         is_dm=is_dm,
         text_len=len(msg.text),
+        ingress_lag_ms=ingress_lag_ms,
     )
 
     # Fire feedback within ~100ms so the user knows ARLO heard them.

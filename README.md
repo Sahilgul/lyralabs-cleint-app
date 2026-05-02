@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009485)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-457%20passing-brightgreen)](#testing)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -59,31 +59,39 @@ All durably checkpointed in Postgres so an approval pause can survive worker res
 ## Architecture
 
 ```
-       Slack          ┌────────────────────────────┐                  Celery worker
-   ────────────────► │  apps/api  (FastAPI)        │ ──── enqueue ──► ┌─────────────────────┐
-   /slack/events     │  - /slack/events            │                  │  apps/worker        │
-   buttons + msgs    │  - /oauth/{slack,google,ghl}│                  │  run_agent task     │
-                     │  - /webhooks/stripe         │                  │  resume_agent task  │
-                     │  - /admin/*  (REST)         │                  └─────────┬───────────┘
-                     └──────────────┬──────────────┘                            │
-                                    ▲                                           ▼
-                                    │ CORS                          ┌────────────────────────┐
-            Vite SPA (separate repo: ../lyralabs-admin-ui)         │  LangGraph agent       │
-                                                                    │  agent ◄──► tool_node  │
-                            ┌──────────────┐                       │  agent ─► approval     │
-                            │  Postgres    │ ◄──── checkpoints ───►│   ─► executor ─► critic│
-                            │  + Alembic   │                       │                        │
-                            │  + LangGraph │                       └─────────┬──────────────┘
-                            │  checkpointer│                                 │
-                            └──────────────┘                                 │
-                                    ▲                                        ▼
+       Slack             ┌────────────────────────────┐                Celery worker
+   ─── WebSocket ──────► │  socket_listener (VM)      │ ─ enqueue ──► ┌─────────────────────┐
+   (Socket Mode,         │  AsyncSocketModeHandler    │               │  apps/worker        │
+    persistent,          └────────────────────────────┘               │  run_agent task     │
+    no 3s ack)                                                        │  resume_agent task  │
+                                                                      └─────────┬───────────┘
+       Slack             ┌────────────────────────────┐                         │
+   ─── HTTPS ──────────► │  apps/api  (Cloud Run)     │ ─ enqueue ─►            │
+   /oauth/slack/*        │  - /oauth/{slack,google,…} │                         │
+   /webhooks/stripe      │  - /webhooks/stripe        │                         │
+   /admin/*  (REST)      │  - /admin/*                │                         │
+                         │  - /slack/events (fallback)│                         │
+                         └──────────────┬─────────────┘                         │
+                                        ▲                                       ▼
+                                        │ CORS                       ┌────────────────────────┐
+            Vite SPA (separate repo: ../lyralabs-admin-ui)           │  LangGraph agent       │
+                                                                     │  agent ◄──► tool_node  │
+                            ┌──────────────┐                         │  agent ─► approval     │
+                            │  Postgres    │ ◄──── checkpoints ────► │   ─► executor ─► critic│
+                            │  + Alembic   │                         │                        │
+                            │  + LangGraph │                         └─────────┬──────────────┘
+                            │  checkpointer│                                   │
+                            └──────────────┘                                   │
+                                    ▲                                          ▼
                                     │                              ┌──────────────────────┐
                             ┌──────────────┐                       │  Tools               │
-                            │  Audit log   │ ◄─── tool_call event ─│  google.* (Drive,    │
-                            │              │                       │   Docs, Sheets, Cal) │
-                            │  IntegrConn  │ ──── creds ──────────►│  ghl.*    (Contacts, │
-                            │  (encrypted) │                       │   Pipelines, SMS,    │
-                            └──────────────┘                       │   Calendars)         │
+                            │  Audit log   │ ◄─── tool_call event ─│  slack.*  (history,  │
+                            │              │                       │   users, search,     │
+                            │  IntegrConn  │ ──── creds ──────────►│   canvas)            │
+                            │  (encrypted) │                       │  google.* (Drive,    │
+                            └──────────────┘                       │   Docs, Sheets, Cal) │
+                                                                   │  ghl.*    (Contacts, │
+                                                                   │   Pipelines, SMS)    │
                                                                    │  artifact.* (PDF,    │
                                                                    │   chart.line, .bar)  │
                                                                    └──────────┬───────────┘
@@ -93,18 +101,28 @@ All durably checkpointed in Postgres so an approval pause can survive worker res
                                                                        (PDF / PNG)
 ```
 
-**Two deployable services in this repo**
+**Three deployable processes in this repo**
 
-| Service   | Tech          | Runs on                                | Responsibility                                                                  |
-| --------- | ------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| `api`     | FastAPI 0.115 | Cloud Run (`lyralabs-app`)             | Webhooks (Slack, Stripe), OAuth callbacks, admin REST API.                      |
-| `worker`  | Celery 5.4    | GCE VM (`lyralabs-worker`, `e2-small`) | Run the LangGraph agent for each enqueued user request; resume on approval.    |
+| Service           | Tech            | Runs on                                | Responsibility                                                                  |
+| ----------------- | --------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
+| `api`             | FastAPI 0.115   | Cloud Run (`lyralabs-app`)             | OAuth callbacks (Slack, Google, GHL), Stripe webhooks, admin REST API. Also serves `/slack/events` as an HTTPS fallback if Socket Mode is disabled. |
+| `worker`          | Celery 5.4      | GCE VM (`lyralabs-worker`, `e2-small`) | Run the LangGraph agent for each enqueued user request; resume on approval.    |
+| `socket_listener` | slack_bolt async | Same VM, sidecar container            | Maintain the persistent Slack Socket Mode WebSocket and enqueue `run_agent` tasks. Idle-no-op when `SLACK_APP_TOKEN` is empty so deploys without the token don't crash-loop. |
 
-The two services share **one Docker image** built from the root `Dockerfile`. The
-worker just overrides the default `CMD` with `celery -A apps.worker.celery_app:celery worker ...`.
-The VM also hosts the Redis broker that the API talks to (see [`infra/vm/`](infra/vm/));
-this hybrid topology keeps Slack response times under 3 s on Cloud Run while
-avoiding HTTP-shaped health-check costs for the always-polling worker.
+All three services share **one Docker image** built from the root `Dockerfile` —
+they're just three different commands. The VM hosts the Redis broker
+(`lyralabs-redis`) that all three talk to (see [`infra/vm/`](infra/vm/));
+this hybrid topology keeps OAuth + Stripe webhooks on Cloud Run's
+HTTP-shaped scale-to-N, while the always-on Slack listener and the
+Celery worker live where polling is cheap.
+
+**Why Socket Mode for inbound events.** The HTTPS webhook path retries an
+event up to 3× when a 2xx isn't returned within 3 s, which on Cloud Run
+cold starts produced retry storms (4× duplicate `run_agent` tasks for one
+DM). Socket Mode streams events over a persistent WebSocket — no 3-s-ack
+cliff, no public ingress for inbound, no cold-start tax. OAuth still
+flows over HTTPS, because the install callback is per-workspace and
+needs a public URL.
 
 **Admin UI (separate repo)**
 
@@ -130,7 +148,7 @@ static site. It calls this API cross-origin; the FastAPI CORS allow-list
 lyralabs/
 ├── apps/
 │   ├── api/                       FastAPI app
-│   │   ├── main.py                Mounts Slack, OAuth, Stripe, admin routers
+│   │   ├── main.py                Mounts Slack OAuth, other OAuth, Stripe, admin routers
 │   │   ├── stripe_webhook.py      Handles subscription / invoice events
 │   │   ├── admin/
 │   │   │   ├── auth.py            JWT-bearing admin principal dependency
@@ -139,51 +157,55 @@ lyralabs/
 │   │       ├── _state.py          Signed JWT state for OAuth round-trips
 │   │       ├── google.py          /oauth/google/{install,callback}
 │   │       └── ghl.py             /oauth/ghl/{install,callback}
-│   └── worker/                    Celery
-│       ├── celery_app.py          Celery instance + queue routing
-│       └── tasks/run_agent.py     run_agent + resume_agent task entrypoints
+│   ├── worker/                    Celery
+│   │   ├── celery_app.py          Celery instance + queue routing
+│   │   └── tasks/run_agent.py     run_agent + resume_agent task entrypoints
+│   └── socket_listener/           Slack Socket Mode runner
+│       └── main.py                AsyncSocketModeHandler entrypoint; idle-no-op when SLACK_APP_TOKEN is empty
 │
 │   (The admin UI lives in a sibling repo: ../lyralabs-admin-ui)
 │
 ├── packages/
 │   └── lyra_core/             Shared library
 │       ├── common/
-│       │   ├── config.py          pydantic-settings: env + provider scopes
+│       │   ├── config.py          pydantic-settings: env + provider scopes (incl. SLACK_APP_TOKEN)
 │       │   ├── crypto.py          HKDF per-tenant Fernet key derivation
 │       │   ├── llm.py             LiteLLM router + cost extractor
 │       │   ├── audit.py           Append-only audit log helper
-│       │   └── logging.py         Structlog config
+│       │   └── logging.py         Structlog config + phase() context manager + bind_job_context()
 │       ├── db/
 │       │   ├── models.py          SQLAlchemy 2.0 ORM (Tenant, User, IntegrationConnection, …)
 │       │   └── session.py         Async engine + FastAPI dependency
 │       ├── channels/
-│       │   ├── schema.py          InboundMessage / OutboundReply / Artifact (channel-agnostic)
+│       │   ├── schema.py          InboundMessage / OutboundReply / Artifact (channel-agnostic, with agent_thread_id)
 │       │   ├── slack/
-│       │   │   ├── adapter.py     slack_bolt App + event handlers + interactivity
-│       │   │   ├── install_store.py  Postgres-backed InstallationStore (encrypted tokens)
-│       │   │   └── poster.py      Outbound poster: chat.postMessage + files_upload_v2
+│       │   │   ├── adapter.py     build_slack_app (HTTPS) + build_socket_mode_app (WebSocket), shared handlers
+│       │   │   ├── install_store.py  Postgres-backed InstallationStore (encrypted tokens, cache-invalidating)
+│       │   │   └── poster.py      Outbound poster + 10-min bot-token cache
 │       │   └── teams/adapter.py   Phase-2 placeholder
 │       ├── tools/
 │       │   ├── base.py            Tool[InputT, OutputT] interface, ApprovalRequired, ToolError
 │       │   ├── registry.py        default_registry + auto-discovery via package import
 │       │   ├── credentials.py     ProviderCredentials loader + refresh (Google + GHL)
+│       │   ├── slack/             conversations, users, search, canvas (mirrors mcp.slack.com)
 │       │   ├── google/            drive, docs, sheets, calendar (+ _client builders)
 │       │   ├── ghl/               client, contacts, pipelines, conversations, calendars
 │       │   └── artifacts/         pdf (markdown→HTML→WeasyPrint), chart (Plotly + kaleido)
 │       └── agent/
 │           ├── state.py           AgentState TypedDict + Plan / PlanStep / StepResult
-│           ├── memory.py          4-tier memory (workspace facts + Qdrant collection)
+│           ├── memory.py          4-tier memory (workspace facts cached 30 s + Qdrant collection)
 │           ├── checkpointer.py    LangGraph Postgres checkpointer wrapper
 │           ├── graph.py           Wires the StateGraph
-│           └── nodes/             agent, tool_node, approval, executor, critic, artifact
+│           └── nodes/             agent (with history-trim), tool_node, approval, executor, critic, artifact
 │
 ├── tests/
 │   ├── conftest.py                Env shim + shared fixtures (mock_session, make_ctx, patch_chat …)
-│   ├── unit/  (379 tests)         One test file per source module — see Testing section
+│   ├── unit/  (457 tests)         One test file per source module — see Testing section
 │   └── integration/               Reserved for tests that need real Postgres
 │
 ├── infra/
-│   ├── docker-compose.yml         Local: postgres + redis + qdrant + api + worker
+│   ├── docker-compose.yml         Local: postgres + redis + qdrant + api + worker + socket_listener
+│   ├── vm/docker-compose.yml      Production VM: redis + worker + socket_listener
 │   ├── cloud-run/                 service.yaml per service for `gcloud run deploy`
 │   ├── github-actions/            CI: lint + test + build + deploy
 │   └── slack-app-manifest.yml     Slack App Directory manifest
@@ -246,6 +268,11 @@ Every tool is a `Tool[InputT, OutputT]` with a Pydantic input/output schema, a u
 
 | Tool                              | What it does                                                              |
 | --------------------------------- | ------------------------------------------------------------------------- |
+| `slack.conversations.history`     | Read recent messages from a channel/DM (older context not in live state). |
+| `slack.conversations.replies`     | Read every message in a specific Slack thread.                            |
+| `slack.users.info`                | Look up a single user's profile by id (resolves `U…` to a name + email).   |
+| `slack.users.list`                | Paginated workspace member directory; resolves a name back to a user id.  |
+| `slack.search.messages`           | Workspace-wide message search. Uses the **user** token (Slack disallows bot tokens here); surfaces a clean missing-scope error if the workspace was installed without `search:read.*` user scopes. |
 | `google.drive.search`             | Full-text Drive search with optional MIME filter.                         |
 | `google.drive.read`               | Read file content. Native docs auto-export to `text/plain` or `text/csv`. |
 | `google.sheets.read`              | Read an A1 range; returns rows + dimensions.                              |
@@ -256,12 +283,21 @@ Every tool is a `Tool[InputT, OutputT]` with a Pydantic input/output schema, a u
 
 | Tool                              | What it does                                                              |
 | --------------------------------- | ------------------------------------------------------------------------- |
+| `slack.canvas.create`             | Create a Slack canvas (rich shareable doc) from markdown, optionally attached to a channel. |
 | `google.docs.create`              | Create a Doc with a title + body, optionally move to a Drive folder.      |
 | `google.sheets.append`            | Append rows to a Sheet (`USER_ENTERED` or `RAW`).                         |
 | `google.calendar.create_event`    | Insert an event with attendees + sendUpdates=all.                         |
 | `ghl.contacts.create`             | Create a contact (requires email or phone).                               |
 | `ghl.conversations.send_message`  | SMS or Email to a contact (subject required for Email).                   |
 | `ghl.calendars.book_appointment`  | Book a confirmed appointment with a contact.                              |
+
+The Slack tools mirror the surface of the official `mcp.slack.com` MCP
+server but live in-process: ARLO is already the Slack app, so going
+through MCP's JSON-RPC-over-HTTP transport would just be calling our
+own server from our own process. The tool layer keeps a typed
+`SlackTokenMissing` exception so the agent can degrade gracefully (e.g.
+"the workspace was installed without search scopes; please re-authorize")
+instead of crashing on missing bot/user tokens.
 
 ### Artifact generators
 
@@ -293,17 +329,50 @@ The executor lifts whatever the tool put into `ctx.extra["artifacts"]` onto the 
 class InboundMessage(BaseModel):
     surface: Surface             # "slack" | "teams"
     tenant_external_id: str      # T0123 (Slack team_id)
-    channel_id: str              # C0123
-    thread_id: str               # message ts
+    channel_id: str              # C0123 / D0123
+    thread_id: str               # Slack thread_ts (or msg ts) — for audit
+    agent_thread_id: str         # LangGraph checkpointer key. See below.
     user_id: str                 # U0123
     text: str
     files: list[dict] = []
+    reply_thread_ts: str | None  # how the bot threads its reply (UX)
+    is_dm: bool = False
     raw: dict = {}
 ```
 
-The Slack adapter (`channels/slack/adapter.py`) handles `app_mention`, DM `message`, the `/arlo` slash command, and the `approval` button action. On install, tokens are encrypted with the per-tenant Fernet key and stored in `slack_installations`. On uninstall / token revoke, the workspace is marked cancelled and tokens are zeroed.
+`agent_thread_id` is the key for the LangGraph checkpointer (the agent's
+memory). Computed by the adapter:
 
-The Teams adapter is a stub for Phase 2; the channel-agnostic schema means the agent core needs no changes to support it.
+- **DM**: `slack:dm:{team}:{channel}:{user}` — one continuous agent thread
+  per (team, DM channel, user). Top-level DM messages share memory, so
+  ARLO remembers what you said in a prior message even if you didn't
+  thread it. (Originally the key was per-message-ts and reset every
+  turn, which caused the "ARLO can't remember my name across two DMs" bug.)
+- **Channel @-mention / thread reply**: `slack:ch:{team}:{channel}:{thread_root}`
+  where `thread_root = thread_ts or msg_ts`. One agent memory per Slack
+  thread; new threads start fresh.
+
+Reply threading (`reply_thread_ts`) is independent of the agent key:
+it's purely a UX choice (DM top-level reply gets posted top-level;
+channel mention gets threaded under the user's message).
+
+### Slack transport
+
+The Slack adapter ([`channels/slack/adapter.py`](packages/lyra_core/channels/slack/adapter.py))
+exposes two builders:
+
+- `build_slack_app()` — used by the FastAPI `/slack/events` HTTPS
+  endpoint and the OAuth install flow. Includes a retry-dropping
+  middleware so Slack's 3-s-ack retries don't enqueue duplicate
+  `run_agent` tasks.
+- `build_socket_mode_app()` — used by [`apps/socket_listener/main.py`](apps/socket_listener/main.py)
+  to maintain a persistent WebSocket. Same event handlers as the HTTPS
+  app; events bypass the 3-s-ack mechanism entirely. Multi-tenant by
+  design — the Slack App-Level Token is per-app, and per-event
+  authorization still flows through the `PostgresInstallationStore`.
+
+The Teams adapter is a stub for Phase 2; the channel-agnostic schema
+means the agent core needs no changes to support it.
 
 ---
 
@@ -323,9 +392,47 @@ The Teams adapter is a stub for Phase 2; the channel-agnostic schema means the a
 Four tiers, all per-tenant:
 
 1. **Working memory** — LangGraph state for the current turn. Volatile.
-2. **Session memory** — LangGraph Postgres checkpointer keyed by `thread_id`. Survives interrupts.
-3. **Workspace memory** — Durable per-tenant facts (`team_slug`, default Drive folder, etc.) in `tenants.settings.facts` JSONB. Helpers: `get_workspace_facts(tenant_id)` / `upsert_workspace_fact(tenant_id, key, value)`.
-4. **Semantic memory** — Per-tenant Qdrant collection `tenant_<uuid>` for RAG over their docs. `ensure_tenant_collection()` is idempotent.
+2. **Session memory** — LangGraph Postgres checkpointer keyed by
+   `agent_thread_id`. Survives interrupts. DMs use one stable key per
+   `(team, channel, user)` so memory is continuous across top-level
+   messages; channels are scoped per Slack thread root. The agent node
+   re-injects only the most recent 20 messages into the LLM prompt
+   (with tool-call/tool-result pairs kept intact) so cost stays bounded
+   as a long DM grows — the checkpointer still persists everything for
+   audit, only the LLM input is trimmed.
+3. **Workspace memory** — Durable per-tenant facts (`team_slug`, default
+   Drive folder, etc.) in `tenants.settings.facts` JSONB. Helpers:
+   `get_workspace_facts(tenant_id)` / `upsert_workspace_fact(tenant_id, key, value)`.
+   Cached in-process for 30 s (admin edits invalidate automatically) so
+   a multi-iteration agent loop doesn't re-fetch on every turn.
+4. **Semantic memory** — Per-tenant Qdrant collection `tenant_<uuid>` for
+   RAG over their docs. `ensure_tenant_collection()` is idempotent.
+
+Slack bot tokens are also cached in-process (10 min TTL) keyed by
+`tenant_id`; OAuth save and bot-token-refresh paths invalidate the
+cache automatically so a freshly rotated token is picked up immediately
+instead of after the TTL.
+
+### Observability — `phase()` timing
+
+Every long step in the request path emits a structured `phase.start` /
+`phase.end` pair via [`common/logging.py::phase`](packages/lyra_core/common/logging.py),
+with a `duration_ms` and a `phase_ok` flag. `bind_job_context()` stamps
+`job_id` / `thread_id` / `tenant_id` onto every line in the task, so
+one task can be reconstructed end-to-end with
+`grep job_id=<uuid> /var/log/...`.
+
+Instrumented phases:
+
+- `slack.event.enqueue` (with `ingress_lag_ms` from Slack's `event_ts`)
+- `worker.tenant_lookup_and_job_insert`, `worker.checkpointer_open`,
+  `worker.graph_invoke`, `worker.mark_job_done`
+- `agent.workspace_facts_fetch`, `agent.llm_call` (with token counts +
+  cost), `agent.post_reply`, `agent.tool_call` (per tool),
+  `agent.tool_audit_write`
+- `slack.token_fetch`, `slack.chat_postMessage`, `slack.files_upload_v2`
+- `run_agent.task_total` line at the end with the wall-clock total +
+  total cost.
 
 ---
 
@@ -384,7 +491,7 @@ The api will be at `http://localhost:8000` (`/healthz`, `/readyz`, `/docs` for S
 uv venv .venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
-make test                         # 379 tests, ~8s
+make test                         # 457 tests, ~8s
 ```
 
 ---
@@ -403,6 +510,9 @@ Every setting is loaded from environment variables via `pydantic-settings` in `p
 | `LLM_PRIMARY_MODEL`              |          | Default `dashscope/qwen-max`. Any LiteLLM-supported model.           |
 | `LLM_CHEAP_MODEL`                |          | Default `dashscope/qwen-turbo`.                                      |
 | `SLACK_CLIENT_ID/SECRET/SIGNING_SECRET` | ✅ for Slack channel | Without them the api boots in stub mode (no /oauth/slack). |
+| `SLACK_SCOPES`                   | ✅ for Slack channel | Bot scopes requested at install. Defaults include `mpim:history`, `users:read.email`, `canvases:read/write` for the new tools. |
+| `SLACK_USER_SCOPES`              | optional | User scopes (`xoxp-` token). Required only for `slack.search.messages` (`search:read.*`). Empty = the search tool surfaces a clean "missing permission" error. |
+| `SLACK_APP_TOKEN`                | optional | App-Level Token (`xapp-…`, scope `connections:write`). Set this to enable Socket Mode; leave empty and the `socket_listener` container stays idle while the HTTPS `/slack/events` path remains active. |
 | `GOOGLE_OAUTH_CLIENT_ID/SECRET`  | ✅ for Google | Plus `GOOGLE_OAUTH_REDIRECT_URI` and the scope CSV.              |
 | `GHL_CLIENT_ID/SECRET`           | ✅ for GHL | Marketplace credentials.                                              |
 | `STRIPE_*`                       | ✅ for billing | Secret key, webhook secret, monthly price id.                    |
@@ -480,7 +590,7 @@ make gen-key
 
 ## Testing
 
-**379 unit tests, 100% passing in ~8s.** Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
+**457 unit tests, 100% passing in ~8s.** Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
 
 ```bash
 make test                         # run everything
@@ -490,19 +600,21 @@ make test-coverage                # with coverage report
 
 ### Coverage by module
 
-| Area                                                        | Tests |
-| ----------------------------------------------------------- | ----: |
-| `common/` (config, crypto, logging, llm, audit)             |    47 |
-| `db/` (model schema, defaults, indices, constraints)        |    14 |
-| `channels/` (schema, slack adapter/install_store/poster, teams) | 29 |
-| `tools/` core (base, registry, credentials)                 |    30 |
-| `tools/google/*`                                            |    35 |
-| `tools/ghl/*`                                               |    39 |
-| `tools/artifacts/*` (pdf markdown, charts)                  |    18 |
-| `agent/` (state, memory, all 7 nodes, graph wiring)         |    72 |
-| `apps/api/*` (oauth state/google/ghl, admin auth+routes, stripe webhook, main) | 50 |
-| `apps/worker/*` (celery config, run_agent, resume_agent)    |    23 |
-| **Total**                                                   |  **379** |
+| Area                                                            | Tests |
+| --------------------------------------------------------------- | ----: |
+| `common/` (config, crypto, logging incl. phase(), llm, audit)   |    55 |
+| `llm/` (catalog, router)                                        |    54 |
+| `db/` (model schema, defaults, indices, constraints)            |    17 |
+| `channels/` (schema incl. agent_thread_id, slack adapter, install_store, poster, teams) | 51 |
+| `tools/` core (base, registry, credentials)                     |    31 |
+| `tools/slack/*` (history, replies, users.info/list, search, canvas) | 8 |
+| `tools/google/*`                                                |    35 |
+| `tools/ghl/*`                                                   |    39 |
+| `tools/artifacts/*` (pdf markdown, charts)                      |    18 |
+| `agent/` (state, memory + cache, all 7 nodes, graph wiring)     |    67 |
+| `apps/api/*` (oauth state/google/ghl, admin auth+routes, admin_llm, stripe webhook, main) | 60 |
+| `apps/worker/*` (celery config, run_agent, resume_agent)        |    22 |
+| **Total**                                                       |  **457** |
 
 ### Test design
 
@@ -523,13 +635,13 @@ make test-coverage                # with coverage report
 
 ## Deployment
 
-Hybrid topology: the API runs on Cloud Run (HTTP-shaped, scale-to-N), the worker runs on a single Compute Engine VM alongside its own Redis broker (pull-based, always-on, cheaper than Cloud Run for sustained polling). Same `Dockerfile` for both — only the runtime command differs.
+Hybrid topology: the API runs on Cloud Run (HTTP-shaped, scale-to-N) and serves OAuth callbacks + Stripe webhooks + admin REST. The Compute Engine VM hosts three sidecar containers — the Celery worker, the Slack Socket Mode listener, and a self-hosted Redis broker — pull-based and always-on, cheaper than Cloud Run for sustained polling and persistent WebSockets. Same `Dockerfile` for all three processes; only the runtime command differs.
 
-| Service            | Repo                | Where it runs                                       | Image / build source                                                | Deploy trigger                                                                                                                                                |
-| ------------------ | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api`              | this repo           | Cloud Run (`lyralabs-app`)                          | `./Dockerfile` (default `CMD` runs uvicorn)                         | Cloud Build trigger on `main` → `gcloud run deploy lyralabs-app`. Min instances ≥ 1 so Slack doesn't time out the 3 s ack. See [`infra/cloud-run/README.md`](infra/cloud-run/README.md). |
-| `worker` + `redis` | this repo           | GCE VM (`lyralabs-worker`, `e2-small`, ~$13/mo)     | `./Dockerfile` (`command` overridden to `celery worker`)            | Manual: SSH into VM, run `infra/vm/deploy.sh` (pulls fresh image + recreates the worker container). Watchtower / Cloud Build SSH automation is Sprint 2. See [`infra/vm/README.md`](infra/vm/README.md). |
-| `admin-ui`         | `lyralabs-admin-ui` | Vercel (`https://lyralabs.vercel.app`)              | `npm run build` (Vercel auto-detected, no Docker)                   | Git push to `main` → Vercel rebuild. `VITE_API_BASE` and other env vars live in the Vercel project settings. Origin must be in `ADMIN_BASE_URL` on this repo. |
+| Service                                | Repo                | Where it runs                                       | Image / build source                                                | Deploy trigger                                                                                                                                                |
+| -------------------------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api`                                  | this repo           | Cloud Run (`lyralabs-app`)                          | `./Dockerfile` (default `CMD` runs uvicorn)                         | Cloud Build trigger on `main` → `gcloud run deploy lyralabs-app`. Min instances ≥ 1 so OAuth callbacks don't cold-start. See [`infra/cloud-run/README.md`](infra/cloud-run/README.md). |
+| `worker` + `socket_listener` + `redis` | this repo           | GCE VM (`lyralabs-worker`, `e2-small`, ~$13/mo)     | `./Dockerfile` (`command` overridden per service)                   | Manual: SSH into VM, run `infra/vm/deploy.sh` (pulls fresh image + recreates all three containers). Watchtower / Cloud Build SSH automation is Sprint 2. See [`infra/vm/README.md`](infra/vm/README.md). |
+| `admin-ui`                             | `lyralabs-admin-ui` | Vercel (`https://lyralabs.vercel.app`)              | `npm run build` (Vercel auto-detected, no Docker)                   | Git push to `main` → Vercel rebuild. `VITE_API_BASE` and other env vars live in the Vercel project settings. Origin must be in `ADMIN_BASE_URL` on this repo. |
 
 Managed dependencies:
 
@@ -542,7 +654,7 @@ CI gates (GitHub Actions on this repo):
 
 1. `ruff check` + `ruff format --check`
 2. `mypy packages apps`
-3. `make test` (the full 379-test suite)
+3. `make test` (the full 457-test suite)
 4. Build + push image to Artifact Registry (`us-east1-docker.pkg.dev/<project>/lyralabs/lyralabs-app`)
 5. `gcloud run deploy lyralabs-app`, blue/green via revisions
 

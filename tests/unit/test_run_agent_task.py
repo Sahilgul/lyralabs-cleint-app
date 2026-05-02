@@ -22,6 +22,7 @@ def _make_msg(text: str = "do x", *, is_dm: bool = False) -> str:
         tenant_external_id="T-XYZ",
         channel_id="C1",
         thread_id="thr-1",
+        agent_thread_id=("slack:dm:T-XYZ:C1:U1" if is_dm else "slack:ch:T-XYZ:C1:thr-1"),
         user_id="U1",
         text=text,
         is_dm=is_dm,

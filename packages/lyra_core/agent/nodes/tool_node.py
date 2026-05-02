@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from ...common.audit import record_event
-from ...common.logging import get_logger
+from ...common.logging import get_logger, phase
 from ...db.session import async_session
 from ...tools.base import ToolContext
 from ...tools.credentials import get_credentials
@@ -92,26 +92,31 @@ async def _execute_one(
         return _err(f"Argument validation failed: {exc}"), []
 
     try:
-        result = await tool.safe_run(ctx, args_obj)
+        async with phase("agent.tool_call", tool=name):
+            result = await tool.safe_run(ctx, args_obj)
     except Exception as exc:
         log.exception("tool_node.crash", tool=name)
         return _err(f"Tool crashed: {exc}"), []
 
     # Persist an audit event so read calls show up alongside writes.
-    async with async_session() as s:
-        await record_event(
-            s,
-            tenant_id=tenant_id,
-            actor_user_id=user_id,
-            job_id=job_id,
-            event_type="tool_call",
-            tool_name=name,
-            args=args,
-            result_status="ok" if result.ok else "error",
-            cost_usd=result.cost_usd,
-            extra={"error": result.error} if result.error else {},
-        )
-        await s.commit()
+    # Wrapped in a phase so we can see audit-write latency across tools;
+    # if it shows up as a hot spot we can switch to a buffered/batched
+    # pattern (one append per tool, single flush at end of task).
+    async with phase("agent.tool_audit_write", tool=name, ok=result.ok):
+        async with async_session() as s:
+            await record_event(
+                s,
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                job_id=job_id,
+                event_type="tool_call",
+                tool_name=name,
+                args=args,
+                result_status="ok" if result.ok else "error",
+                cost_usd=result.cost_usd,
+                extra={"error": result.error} if result.error else {},
+            )
+            await s.commit()
 
     if not result.ok:
         return _err(f"Tool error: {result.error or 'unknown'}"), []

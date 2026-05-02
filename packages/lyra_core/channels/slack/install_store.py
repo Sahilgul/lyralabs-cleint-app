@@ -126,6 +126,11 @@ class PostgresInstallationStore(AsyncInstallationStore):
             )
             s.add(row)
             await s.commit()
+            # New install / re-install: drop any cached bot token from a
+            # prior installation so the very next reply uses the new one.
+            from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+
+            invalidate_bot_token_cache(tenant_id)
             log.info("slack.install.saved", team_id=team_id, tenant_id=tenant_id)
 
     async def async_save_bot(self, bot: Bot) -> None:
@@ -185,6 +190,15 @@ class PostgresInstallationStore(AsyncInstallationStore):
                 row.bot_user_id = bot.bot_user_id
 
             await s.commit()
+            # Critical: drop the in-process token cache so the very next
+            # call uses the freshly rotated token. Without this, the cache
+            # would keep returning the stale token until the TTL expired
+            # (~10 min later) and Slack would reject every reply with
+            # `invalid_auth` for that window -- the original symptom that
+            # made us add cache invalidation here in the first place.
+            from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+
+            invalidate_bot_token_cache(row.tenant_id)
             log.info(
                 "slack.bot.refreshed",
                 team_id=team_id,

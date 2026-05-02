@@ -11,9 +11,20 @@ from lyra_core.agent.memory import (
     collection_for,
     ensure_tenant_collection,
     get_workspace_facts,
+    invalidate_workspace_facts_cache,
     upsert_workspace_fact,
 )
 from lyra_core.db.models import Tenant
+
+
+@pytest.fixture(autouse=True)
+def _reset_facts_cache():
+    """The workspace_facts cache is module-level; clear between tests so
+    a tenant_id reused across tests doesn't return a stale cached value
+    from a prior test's mocked DB."""
+    invalidate_workspace_facts_cache()
+    yield
+    invalidate_workspace_facts_cache()
 
 
 def test_collection_for_replaces_dashes() -> None:
@@ -68,6 +79,68 @@ async def test_get_workspace_facts_returns_empty_when_no_facts(monkeypatch) -> N
     monkeypatch.setattr(memory_mod, "async_session", FakeSession)
     facts = await get_workspace_facts("t1")
     assert facts == {}
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_facts_caches_within_ttl(monkeypatch) -> None:
+    """Second call within TTL must NOT hit the database again -- this is
+    the optimization that drops a Tokyo Postgres round-trip from every
+    agent loop iteration."""
+    tenant = Tenant(external_team_id="T", channel="slack", name="A")
+    tenant.id = "t-cache"
+    tenant.settings = {"facts": {"team_slug": "acme"}}
+
+    n_executes = {"count": 0}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def execute(self, _stmt):
+            n_executes["count"] += 1
+            r = MagicMock()
+            r.scalar_one.return_value = tenant
+            return r
+
+    monkeypatch.setattr(memory_mod, "async_session", FakeSession)
+
+    a = await get_workspace_facts("t-cache")
+    b = await get_workspace_facts("t-cache")
+    c = await get_workspace_facts("t-cache")
+    assert a == b == c == {"team_slug": "acme"}
+    assert n_executes["count"] == 1, "second + third call should hit cache"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_facts_cache_drops_entry(monkeypatch) -> None:
+    tenant = Tenant(external_team_id="T", channel="slack", name="A")
+    tenant.id = "t-inv"
+    tenant.settings = {"facts": {"v": 1}}
+
+    n_executes = {"count": 0}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def execute(self, _stmt):
+            n_executes["count"] += 1
+            r = MagicMock()
+            r.scalar_one.return_value = tenant
+            return r
+
+    monkeypatch.setattr(memory_mod, "async_session", FakeSession)
+
+    await get_workspace_facts("t-inv")
+    invalidate_workspace_facts_cache("t-inv")
+    await get_workspace_facts("t-inv")
+    assert n_executes["count"] == 2
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ land in `tenants.settings` JSONB until we need a dedicated table.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from sqlalchemy import select
@@ -23,11 +24,37 @@ from ..db.session import async_session
 log = get_logger(__name__)
 
 
+# Workspace facts only mutate via the admin panel (rare) and are read on
+# EVERY agent turn. Fetching from Tokyo Postgres on every turn was adding
+# ~200ms per loop iteration. Cache for 30s -- short enough that admin-panel
+# edits propagate quickly, long enough to absorb a multi-iteration agent
+# run for a single user message.
+_FACTS_TTL_SECONDS = 30.0
+_facts_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
 async def get_workspace_facts(tenant_id: str) -> dict[str, Any]:
     """Return durable per-tenant facts (e.g. team slug, default Drive folder)."""
+    cached = _facts_cache.get(tenant_id)
+    if cached is not None:
+        cached_at, facts = cached
+        if time.monotonic() - cached_at < _FACTS_TTL_SECONDS:
+            return facts
+
     async with async_session() as s:
         t = (await s.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one()
-        return (t.settings or {}).get("facts", {})
+        facts = (t.settings or {}).get("facts", {})
+
+    _facts_cache[tenant_id] = (time.monotonic(), facts)
+    return facts
+
+
+def invalidate_workspace_facts_cache(tenant_id: str | None = None) -> None:
+    """Drop the cached facts (call after admin edits a tenant's settings)."""
+    if tenant_id is None:
+        _facts_cache.clear()
+    else:
+        _facts_cache.pop(tenant_id, None)
 
 
 async def upsert_workspace_fact(tenant_id: str, key: str, value: Any) -> None:
@@ -39,6 +66,7 @@ async def upsert_workspace_fact(tenant_id: str, key: str, value: Any) -> None:
         settings_dict["facts"] = facts
         t.settings = settings_dict
         await s.commit()
+    invalidate_workspace_facts_cache(tenant_id)
 
 
 # --- Semantic / RAG (Qdrant) -------------------------------------------------

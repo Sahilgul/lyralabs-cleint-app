@@ -1,11 +1,18 @@
-# lyralabs-worker VM stack — Redis + Celery worker on a single GCE e2-small.
+# lyralabs-worker VM stack — Redis + Celery worker + Slack Socket Mode listener
+# on a single GCE e2-small.
 #
 # Layout:
-#   - redis  : self-hosted, AUTH-protected, AOF persistence, no public binding
-#              (only the worker connects via the docker network; the Cloud Run
-#              API connects via the VM's *external* IP on port 6379).
-#   - worker : Celery worker pulling from the same image the API uses, with
-#              the runtime CMD overridden to run celery instead of uvicorn.
+#   - redis           : self-hosted, AUTH-protected, AOF persistence, no
+#                       public binding (only the worker + socket_listener
+#                       connect via the docker network; the Cloud Run API
+#                       connects via the VM's external IP on port 6379).
+#   - worker          : Celery worker pulling from the same image the API
+#                       uses, runtime CMD overridden to run celery.
+#   - socket_listener : Slack Socket Mode runner. Maintains the persistent
+#                       WebSocket to Slack and enqueues run_agent tasks
+#                       onto the same redis queue the worker consumes.
+#                       Skipped automatically when SLACK_APP_TOKEN is empty
+#                       (sleeps idle instead of crash-looping).
 #
 # Why this shape:
 #   - "restart: always" replaces the systemd-style supervisor we'd otherwise
@@ -72,6 +79,23 @@ services:
       - agent
       - --concurrency=4
       - --loglevel=INFO
+
+  socket_listener:
+    # Same image as the worker; just a different process. Inbound Slack
+    # events arrive over a persistent WebSocket and are dispatched into
+    # the `agent` Celery queue (consumed by the worker service above).
+    # The listener doesn't need a port; all I/O is outbound.
+    image: ${WORKER_IMAGE}
+    container_name: lyralabs-socket-listener
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    command:
+      - python
+      - -m
+      - apps.socket_listener.main
 
 volumes:
   redis_data:

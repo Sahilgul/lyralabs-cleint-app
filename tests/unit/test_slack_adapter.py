@@ -170,6 +170,96 @@ async def test_enqueue_dm_inside_thread_keeps_thread_reply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_enqueue_dm_uses_continuous_agent_thread_id() -> None:
+    """DM top-level messages must share one agent_thread_id per (team, channel,
+    user), so the LangGraph checkpointer keeps memory across messages.
+    Regression for: ARLO forgetting the user's name between top-level DMs.
+    """
+    import json
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    payloads = []
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        for ts in ("1.0", "2.0", "3.0"):
+            await _enqueue_from_event(
+                {
+                    "team_id": "T1",
+                    "event": {
+                        "type": "message",
+                        "channel": "D-dm",
+                        "channel_type": "im",
+                        "user": "U-sahil",
+                        "text": f"msg @ {ts}",
+                        "ts": ts,
+                    },
+                }
+            )
+            payloads.append(
+                json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+            )
+
+    keys = {p["agent_thread_id"] for p in payloads}
+    assert keys == {"slack:dm:T1:D-dm:U-sahil"}, (
+        f"All three DMs should share one agent thread; got {keys}"
+    )
+    # And the Slack-side `thread_id` still tracks per-message ts so existing
+    # consumers (audit, status indicator) keep working.
+    assert [p["thread_id"] for p in payloads] == ["1.0", "2.0", "3.0"]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_channel_mention_scopes_agent_thread_to_slack_thread() -> None:
+    """Channel @-mentions must scope agent memory per Slack thread, so two
+    mentions in the same channel don't bleed context.
+    """
+    import json
+
+    fake_run_agent = MagicMock()
+    fake_module = MagicMock()
+    fake_module.run_agent = fake_run_agent
+
+    with patch.dict("sys.modules", {"apps.worker.tasks.run_agent": fake_module}):
+        # First mention: brand-new top-level message in #general.
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "user": "U1",
+                    "text": "<@bot> status",
+                    "ts": "100.0",
+                },
+            }
+        )
+        first = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+        # Second mention: a reply inside an existing thread (different thread_ts).
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "thread_ts": "999.0",
+                    "user": "U1",
+                    "text": "<@bot> follow up",
+                    "ts": "1000.0",
+                },
+            }
+        )
+        second = json.loads(fake_run_agent.delay.call_args.kwargs["message_json"])
+
+    assert first["agent_thread_id"] == "slack:ch:T1:C-general:100.0"
+    assert second["agent_thread_id"] == "slack:ch:T1:C-general:999.0"
+    assert first["agent_thread_id"] != second["agent_thread_id"]
+
+
+@pytest.mark.asyncio
 async def test_enqueue_channel_mention_threads_on_user_message() -> None:
     """Channel @-mentions should still get threaded responses so the
     channel doesn't get noisy with bot replies.

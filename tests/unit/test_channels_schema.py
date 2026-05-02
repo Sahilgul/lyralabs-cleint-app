@@ -24,10 +24,12 @@ class TestInboundMessage:
             tenant_external_id="T1",
             channel_id="C1",
             thread_id="123.456",
+            agent_thread_id="slack:dm:T1:C1:U1",
             user_id="U1",
             text="hello",
         )
         assert m.surface == Surface.SLACK
+        assert m.agent_thread_id == "slack:dm:T1:C1:U1"
         assert m.files == []
         assert m.raw == {}
 
@@ -35,12 +37,24 @@ class TestInboundMessage:
         with pytest.raises(ValidationError):
             InboundMessage()  # type: ignore[call-arg]
 
+    def test_agent_thread_id_required(self) -> None:
+        with pytest.raises(ValidationError):
+            InboundMessage(  # type: ignore[call-arg]
+                surface=Surface.SLACK,
+                tenant_external_id="T1",
+                channel_id="C1",
+                thread_id="t",
+                user_id="U1",
+                text="hi",
+            )
+
     def test_serializes_round_trip(self) -> None:
         m = InboundMessage(
             surface=Surface.SLACK,
             tenant_external_id="T1",
             channel_id="C1",
             thread_id="123.456",
+            agent_thread_id="slack:ch:T1:C1:123.456",
             user_id="U1",
             text="hi",
             files=[{"id": "F1", "name": "x.pdf"}],
@@ -56,6 +70,7 @@ class TestInboundMessage:
             tenant_external_id="T1",
             channel_id="C1",
             thread_id="t",
+            agent_thread_id="slack:dm:T1:C1:U1",
             user_id="U1",
             text="x",
         )

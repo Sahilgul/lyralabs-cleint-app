@@ -50,14 +50,26 @@ def build_teams_app() -> Any:
         if activity.type != "message" or not activity.text:
             return
 
+        tenant_id = (
+            str(activity.channel_data.get("tenant", {}).get("id", ""))
+            if activity.channel_data
+            else ""
+        )
+        conversation_id = str(activity.conversation.id) if activity.conversation else ""
+        from_id = str(activity.from_property.id) if activity.from_property else ""
+
         msg = InboundMessage(
             surface=Surface.TEAMS,
-            tenant_external_id=str(activity.channel_data.get("tenant", {}).get("id", ""))
-            if activity.channel_data
-            else "",
-            channel_id=str(activity.conversation.id) if activity.conversation else "",
-            thread_id=str(activity.conversation.id) if activity.conversation else "",
-            user_id=str(activity.from_property.id) if activity.from_property else "",
+            tenant_external_id=tenant_id,
+            channel_id=conversation_id,
+            thread_id=conversation_id,
+            # Teams 1:1 / personal scope == one continuous conversation per
+            # (tenant, conversation, user). Channel/group-chat threading
+            # nuances will be revisited when the Teams adapter is fully
+            # wired up; this keeps memory continuous in the personal scope
+            # we ship first.
+            agent_thread_id=f"teams:{tenant_id}:{conversation_id}:{from_id}",
+            user_id=from_id,
             user_display_name=activity.from_property.name if activity.from_property else None,
             text=activity.text.strip(),
             raw=activity.serialize() if hasattr(activity, "serialize") else {},
