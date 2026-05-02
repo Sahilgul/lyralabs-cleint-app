@@ -25,6 +25,7 @@ from lyra_core.channels.slack.adapter import build_slack_app
 from lyra_core.common.config import get_settings
 from lyra_core.common.logging import configure_logging, get_logger
 
+from .admin.auth_routes import router as admin_auth_router
 from .admin.llm import router as admin_llm_router
 from .admin.routes import router as admin_router
 from .oauth.ghl import router as ghl_router
@@ -90,6 +91,7 @@ app.include_router(google_router, prefix="/oauth/google", tags=["oauth-google"])
 app.include_router(ghl_router, prefix="/oauth/ghl", tags=["oauth-ghl"])
 app.include_router(stripe_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+app.include_router(admin_auth_router, prefix="/admin/auth", tags=["admin-auth"])
 # Super-admin (platform operator) routes for runtime LLM model switching.
 app.include_router(admin_llm_router, prefix="/admin/llm", tags=["admin-llm"])
 

@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     # Admin
     admin_jwt_secret: str = ""
     admin_jwt_issuer: str = "lyralabs-admin"
+    admin_register_passcode: str = "7172"  # Gate for new admin account creation
 
     @field_validator("master_encryption_key")
     @classmethod

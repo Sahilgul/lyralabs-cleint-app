@@ -102,6 +102,25 @@ class User(Base):
     tenant: Mapped[Tenant] = relationship(back_populates="users")
 
 
+class AdminUser(Base):
+    """Admin-panel user account (email + bcrypt password).
+
+    Separate from the Slack/Teams `User` table — these are workspace admins
+    who sign in to the admin UI.
+    """
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="owner")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 # -----------------------------------------------------------------------------
 # Channel installations
 # -----------------------------------------------------------------------------

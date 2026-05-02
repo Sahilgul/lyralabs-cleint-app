@@ -14,19 +14,27 @@ encrypted at rest with the tenant's Fernet key.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from logging import Logger
+from time import time
 
+from slack_sdk.errors import SlackApiError
 from slack_sdk.oauth.installation_store import Bot, Installation
 from slack_sdk.oauth.installation_store.async_installation_store import (
     AsyncInstallationStore,
 )
-from sqlalchemy import select
+from slack_sdk.web.async_client import AsyncWebClient
+from sqlalchemy import select, text
 
+from ...common.config import get_settings
 from ...common.crypto import decrypt_for_tenant, encrypt_for_tenant
 from ...common.logging import get_logger
 from ...db.models import SlackInstallation, Tenant
 from ...db.session import async_session
+
+# Rotate this many seconds before expiry so we never hand Bolt an expired token.
+_ROTATION_BUFFER_SECS = 7200  # 2 hours
 
 log = get_logger(__name__)
 
@@ -208,16 +216,7 @@ class PostgresInstallationStore(AsyncInstallationStore):
                 ),
             )
 
-    async def async_find_bot(
-        self,
-        *,
-        enterprise_id: str | None,
-        team_id: str | None,
-        is_enterprise_install: bool | None = False,
-    ) -> Bot | None:
-        row, tenant_id = await self._async_find(team_id=team_id, enterprise_id=enterprise_id)
-        if row is None or tenant_id is None or row.bot_token_encrypted is None:
-            return None
+    def _row_to_bot(self, row: SlackInstallation, tenant_id: str) -> Bot:
         return Bot(
             app_id=None,
             enterprise_id=row.enterprise_id,
@@ -228,16 +227,155 @@ class PostgresInstallationStore(AsyncInstallationStore):
             bot_id=row.bot_id,
             bot_user_id=row.bot_user_id,
             bot_scopes=(row.bot_scopes or "").split(",") if row.bot_scopes else [],
-            bot_refresh_token=(
-                decrypt_for_tenant(tenant_id, row.bot_refresh_token_encrypted)
-                if row.bot_refresh_token_encrypted
-                else None
-            ),
-            bot_token_expires_at=(
-                int(row.bot_token_expires_at.timestamp()) if row.bot_token_expires_at else None
-            ),
+            # Don't expose refresh_token to Bolt — we handle rotation ourselves.
+            # Returning it would cause Bolt to attempt a concurrent rotation.
+            bot_refresh_token=None,
+            bot_token_expires_at=None,
             installed_at=row.installed_at.timestamp() if row.installed_at else None,
         )
+
+    async def _try_rotate(self, row: SlackInstallation, tenant_id: str) -> bool:
+        """Refresh the bot token via Slack's oauth.v2.access (grant_type=refresh_token).
+
+        Uses a Postgres transaction-level advisory lock (pg_try_advisory_xact_lock)
+        so only one worker calls Slack at a time for the same team. If the lock is
+        held (another worker is already rotating), we wait up to 5 s for that worker
+        to finish and then re-check the DB — no second Slack API call.
+
+        Returns True if the row now has a fresh token (either we rotated it or the
+        other worker did), False if rotation failed unrecoverably.
+        """
+        settings = get_settings()
+        if not (settings.slack_client_id and settings.slack_client_secret):
+            log.warning("slack.rotation.skip_no_creds", team_id=row.team_id)
+            return False
+
+        # Stable lock key derived from team_id (fits in int64).
+        lock_key = int.from_bytes(row.team_id.encode()[:8].ljust(8, b"\x00"), "big") & 0x7FFFFFFFFFFFFFFF
+
+        new_token: str | None = None
+        new_expires_at: datetime | None = None
+
+        async with async_session() as s:
+            async with s.begin():
+                locked = (
+                    await s.execute(text(f"SELECT pg_try_advisory_xact_lock({lock_key})"))
+                ).scalar()
+
+                if not locked:
+                    # Another worker is rotating — fall through to wait below.
+                    pass
+                else:
+                    # We hold the lock for this entire transaction (released on commit/rollback).
+                    current = (
+                        await s.execute(
+                            select(SlackInstallation).where(SlackInstallation.id == row.id)
+                        )
+                    ).scalar_one_or_none()
+                    if current is None:
+                        return False
+                    if current.bot_token_expires_at and current.bot_token_expires_at.timestamp() > time() + 60:
+                        # Another worker already refreshed.
+                        row.bot_token_encrypted = current.bot_token_encrypted
+                        row.bot_refresh_token_encrypted = current.bot_refresh_token_encrypted
+                        row.bot_token_expires_at = current.bot_token_expires_at
+                        return True
+
+                    if not current.bot_refresh_token_encrypted:
+                        log.error("slack.rotation.no_refresh_token", team_id=row.team_id)
+                        return False
+
+                    refresh_token = decrypt_for_tenant(tenant_id, current.bot_refresh_token_encrypted)
+                    try:
+                        client = AsyncWebClient(token=None)
+                        resp = await client.oauth_v2_access(
+                            client_id=settings.slack_client_id,
+                            client_secret=settings.slack_client_secret,
+                            grant_type="refresh_token",
+                            refresh_token=refresh_token,
+                        )
+                    except SlackApiError as e:
+                        log.error("slack.rotation.api_error", team_id=row.team_id, error=str(e))
+                        return False
+
+                    if resp.get("token_type") != "bot":
+                        log.error("slack.rotation.unexpected_token_type", team_id=row.team_id, data=resp.data)
+                        return False
+
+                    new_token = resp["access_token"]
+                    new_refresh = resp.get("refresh_token")
+                    new_expires_at = datetime.fromtimestamp(int(time()) + int(resp["expires_in"]), tz=UTC)
+
+                    current.bot_token_encrypted = encrypt_for_tenant(tenant_id, new_token)
+                    if new_refresh:
+                        current.bot_refresh_token_encrypted = encrypt_for_tenant(tenant_id, new_refresh)
+                    current.bot_token_expires_at = new_expires_at
+                    # s.begin() context commits here, which also releases the advisory lock.
+
+        if not locked:
+            # Lock was held by another worker; wait for it then re-read from DB.
+            log.info("slack.rotation.waiting_for_lock", team_id=row.team_id)
+            await asyncio.sleep(5)
+            async with async_session() as s2:
+                fresh = (
+                    await s2.execute(
+                        select(SlackInstallation).where(SlackInstallation.id == row.id)
+                    )
+                ).scalar_one_or_none()
+            if fresh and fresh.bot_token_expires_at and fresh.bot_token_expires_at.timestamp() > time() + 60:
+                row.bot_token_encrypted = fresh.bot_token_encrypted
+                row.bot_refresh_token_encrypted = fresh.bot_refresh_token_encrypted
+                row.bot_token_expires_at = fresh.bot_token_expires_at
+                return True
+            log.error("slack.rotation.lock_wait_no_refresh", team_id=row.team_id)
+            return False
+
+        if new_token is None:
+            return False
+
+        row.bot_token_encrypted = current.bot_token_encrypted
+        row.bot_refresh_token_encrypted = current.bot_refresh_token_encrypted
+        row.bot_token_expires_at = current.bot_token_expires_at
+
+        from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+        invalidate_bot_token_cache(tenant_id)
+        log.info(
+            "slack.rotation.success",
+            team_id=row.team_id,
+            tenant_id=tenant_id,
+            expires_at=new_expires_at.isoformat(),
+        )
+        return True
+
+    async def async_find_bot(
+        self,
+        *,
+        enterprise_id: str | None,
+        team_id: str | None,
+        is_enterprise_install: bool | None = False,
+    ) -> Bot | None:
+        row, tenant_id = await self._async_find(team_id=team_id, enterprise_id=enterprise_id)
+        if row is None or tenant_id is None or row.bot_token_encrypted is None:
+            return None
+
+        needs_rotation = (
+            row.bot_token_expires_at is not None
+            and row.bot_token_expires_at.timestamp() < time() + _ROTATION_BUFFER_SECS
+            and row.bot_refresh_token_encrypted is not None
+        )
+        if needs_rotation:
+            ok = await self._try_rotate(row, tenant_id)
+            if not ok:
+                log.error(
+                    "slack.rotation.failed_returning_stale",
+                    team_id=team_id,
+                    expires_at=row.bot_token_expires_at.isoformat() if row.bot_token_expires_at else None,
+                )
+                # Return None so Bolt surfaces the error clearly rather than
+                # attempting to use a token Slack will reject.
+                return None
+
+        return self._row_to_bot(row, tenant_id)
 
     async def async_find_installation(
         self,
