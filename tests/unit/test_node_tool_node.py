@@ -149,7 +149,7 @@ async def test_tool_node_unknown_tool_returns_error(monkeypatch) -> None:
     )
     out = await tool_node(state)
 
-    assert "Unknown tool" in out["messages"][-1]["content"]
+    assert "not found" in out["messages"][-1]["content"]
 
 
 @pytest.mark.asyncio

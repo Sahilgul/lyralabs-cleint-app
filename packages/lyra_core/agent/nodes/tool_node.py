@@ -30,14 +30,20 @@ from .agent import SUBMIT_PLAN_TOOL_NAME
 log = get_logger(__name__)
 
 
-def _make_ctx(tenant_id: str, job_id: str | None, user_id: str | None) -> ToolContext:
+def _make_ctx(
+    tenant_id: str,
+    job_id: str | None,
+    user_id: str | None,
+    client_id: str | None = None,
+) -> ToolContext:
     async def creds_lookup(provider: str):
-        return await get_credentials(tenant_id, provider)
+        return await get_credentials(tenant_id, provider, client_id)
 
     return ToolContext(
         tenant_id=tenant_id,
         job_id=job_id,
         user_id=user_id,
+        client_id=client_id,
         creds_lookup=creds_lookup,
     )
 
@@ -48,6 +54,7 @@ async def _execute_one(
     tenant_id: str,
     job_id: str | None,
     user_id: str | None,
+    client_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Run one tool_call. Returns (tool_message_for_history, artifacts_to_lift)."""
     fn = tc.get("function") or {}
@@ -66,7 +73,14 @@ async def _execute_one(
     try:
         tool = default_registry.get(name)
     except KeyError:
-        return _err(f"Unknown tool: {name}"), []
+        return (
+            _err(
+                f"Tool `{name}` not found. "
+                f"Call `discover_tools(intent='...')` to find available tools, "
+                f"then use the exact name returned."
+            ),
+            [],
+        )
 
     # The guard. Write tools must go through the plan path.
     if tool.requires_approval:
@@ -107,6 +121,7 @@ async def _execute_one(
             await record_event(
                 s,
                 tenant_id=tenant_id,
+                client_id=client_id,
                 actor_user_id=user_id,
                 job_id=job_id,
                 event_type="tool_call",
@@ -145,13 +160,14 @@ async def tool_node(state: AgentState) -> dict[str, Any]:
     tenant_id = state["tenant_id"]
     job_id = state.get("job_id")
     user_id = state.get("user_id")
-    ctx = _make_ctx(tenant_id, job_id, user_id)
+    client_id = state.get("client_id")
+    ctx = _make_ctx(tenant_id, job_id, user_id, client_id)
 
     artifacts = list(state.get("artifacts", []))
     new_msgs = list(msgs)
 
     for tc in tool_calls:
-        tool_msg, new_artifacts = await _execute_one(ctx, tc, tenant_id, job_id, user_id)
+        tool_msg, new_artifacts = await _execute_one(ctx, tc, tenant_id, job_id, user_id, client_id)
         new_msgs.append(tool_msg)
         artifacts.extend(new_artifacts)
         # Reset ctx.extra.artifacts between calls so we don't double-count.

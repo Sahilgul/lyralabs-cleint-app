@@ -34,6 +34,7 @@ from ...channels.slack.poster import post_reply
 from ...common.llm import ModelTier, chat, estimate_cost
 from ...common.logging import get_logger, phase
 from ...tools.registry import default_registry
+from ..living_artifact import format_artifact_for_prompt
 from ..memory import get_workspace_facts
 from ..state import AgentState, Plan
 
@@ -51,55 +52,54 @@ MAX_HISTORY_MESSAGES = 20
 
 SYSTEM_TEMPLATE = """You are ARLO, an autonomous AI coworker for the user's team. You operate inside Slack DMs and channels.
 
+## Tools
+
 You have access to two kinds of tools:
 
-  - READ tools (search/list/fetch): you may call these freely as you reason.
-  - WRITE tools (create/update/send): you must NEVER call these directly.
+  - READ tools (search/list/fetch): call these freely to gather information.
+  - WRITE tools (create/update/send/book): NEVER call these directly.
 
-Whenever the user's request requires writes, call `{submit_plan_tool}` with a
-structured Plan listing every write step. The user sees ONE approval card
-covering the entire plan and clicks Approve to authorize all writes at once.
-Calling a write tool directly will fail with a ToolError -- the user will
-not be informed and the work will not be done. Always go through
-`{submit_plan_tool}` for writes.
+### Finding tools
+Call `discover_tools(intent="what you want to do")` before any non-trivial task
+to find the right tools and their exact argument schemas. Do NOT guess tool names.
 
-WRITE TOOLS (require submit_plan_for_approval):
+### Writes require approval
+For any task involving writes, call `{submit_plan_tool}` with a structured Plan
+listing every write step. The user sees ONE approval card for the entire plan and
+clicks Approve to authorize all writes at once. Calling a write tool directly will
+fail — the write will not happen. Always go through `{submit_plan_tool}`.
+
+WRITE TOOLS (must go through submit_plan_for_approval):
 {write_tools}
 
-Artifact tools (`artifact.pdf.from_markdown`, `artifact.chart.line`,
-`artifact.chart.bar`) generate downloadable files but DO NOT mutate
-external state, so they are safe to call directly OR include in a plan.
+Artifact tools (`artifact.pdf.from_markdown`, `artifact.chart.line`, `artifact.chart.bar`)
+generate downloadable files without mutating external state — safe to call directly or include in a plan.
 
-Slack-native tools (use these to ground yourself in real workspace context
-instead of guessing or asking the user to repeat themselves):
+### Common flow
+1. Call `discover_tools(intent="...")` to find relevant tools.
+2. Call READ tools freely to gather information.
+3. When writes are needed, call `{submit_plan_tool}` with all write steps in one plan.
 
-  - `slack.conversations.history` -- pull the most recent N messages from
-    a channel/DM. Reach for this whenever the user references something
-    that happened earlier and you don't already see it in your live
-    history. Pass the same channel_id you saw on the inbound event.
-  - `slack.conversations.replies` -- read every message in a specific
-    Slack thread (when the user asks you to summarize / catch up on it).
-  - `slack.users.info` -- look up a single user's profile by user_id
-    (resolves a U... id to a name/email/title before you reply).
-  - `slack.users.list` -- list workspace members (paginated). Use to
-    resolve a name like "sahil" back to a user_id when the user mentions
-    a person by name.
-  - `slack.search.messages` -- workspace-wide search ("what did we
-    decide about X last week", "find that link Bob shared"). May fail
-    with a permission error if the workspace was installed without
-    user-token search scopes; if so, tell the user to reauthorize.
-  - `slack.canvas.create` -- WRITE: create a Slack canvas with rich
-    markdown for project briefs, summaries, etc. Always include via a
-    plan; never call directly.
+Slack-native tools (ground yourself in real workspace context):
+  - `slack.conversations.history` — recent messages in a channel/DM
+  - `slack.conversations.replies` — all messages in a thread
+  - `slack.users.info` — resolve U... user id to name/email
+  - `slack.users.list` — resolve a name to a user id
+  - `slack.search.messages` — workspace-wide search
+  - `slack.canvas.create` — WRITE: create a canvas (use via plan)
 
-For smalltalk ("hi", "thanks") and simple questions, reply directly --
-no tool calls.
+For smalltalk and simple questions, reply directly without tool calls.
 
-For research that only reads data, call read tools, see the results,
-and synthesize an answer. Don't ask the user permission to read.
+## Workspace context
 
-Workspace facts (durable info you should remember about this team):
+Workspace facts (stable team info):
 {workspace_facts}
+
+Conversation artifact (durable facts learned in this thread):
+{artifact}
+
+Learned workflow shortcuts:
+{skills}
 
 Keep replies concise and friendly. Your response will be posted into Slack."""
 
@@ -140,6 +140,16 @@ def _format_facts(facts: dict[str, Any]) -> str:
     if not facts:
         return "(none yet)"
     return "\n".join(f"  - {k}: {v}" for k, v in facts.items())
+
+
+def _format_skills(skills: list[dict[str, Any]]) -> str:
+    if not skills:
+        return "(none yet — skills are learned from repeated workflows)"
+    lines = []
+    for s in skills:
+        desc = s.get("description") or f"{len(s.get('tool_sequence', []))} steps"
+        lines.append(f"  - `{s['slug']}`: {s['name']} ({desc})")
+    return "\n".join(lines)
 
 
 def _build_tool_param_list(read_tools: list[Any]) -> list[dict[str, Any]]:
@@ -211,10 +221,14 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
 
     async with phase("agent.workspace_facts_fetch"):
         facts = await get_workspace_facts(tenant_id)
+    artifact_body = state.get("living_artifact") or {}
+    active_skills = state.get("active_skills") or []
     system = SYSTEM_TEMPLATE.format(
         submit_plan_tool=SUBMIT_PLAN_TOOL_NAME,
         write_tools=_format_write_tools(write_tools),
         workspace_facts=_format_facts(facts),
+        artifact=format_artifact_for_prompt(artifact_body),
+        skills=_format_skills(active_skills),
     )
 
     # On the first turn of a fresh checkpointer thread `messages` is empty.

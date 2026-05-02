@@ -26,11 +26,15 @@ from lyra_core.common.logging import (
 from lyra_core.db.models import Job, Tenant
 from lyra_core.db.session import async_session
 
-# Importing the tools modules triggers their registration in the registry.
+# Importing tools triggers registration in the global registry.
 from lyra_core.tools import artifacts as _artifacts  # noqa: F401
 from lyra_core.tools import ghl as _ghl  # noqa: F401
 from lyra_core.tools import google as _google  # noqa: F401
+from lyra_core.tools import meta_tools as _meta_tools  # noqa: F401
 from lyra_core.tools import slack as _slack  # noqa: F401
+from lyra_core.tools.credentials import get_credentials
+from lyra_core.tools.mcp_registry import discover_and_register_tools
+from lyra_core.tools.registry import default_registry
 from sqlalchemy import select
 
 from ..celery_app import celery
@@ -96,12 +100,10 @@ async def _run(message_json: str) -> dict:
                 thread_id = msg.agent_thread_id
                 job = Job(
                     tenant_id=tenant_id,
+                    client_id=msg.client_id,
                     thread_id=thread_id,
                     user_id=msg.user_id,
                     channel_id=msg.channel_id,
-                    # Stored for audit/debug only -- mirror the Slack
-                    # thread_ts the bot will reply into (None for top-level
-                    # DMs / channel posts).
                     parent_message_ts=msg.reply_thread_ts,
                     user_request=msg.text,
                     status="running",
@@ -114,8 +116,37 @@ async def _run(message_json: str) -> dict:
         # Extend the bound context with job_id now that we have one.
         bind_job_context(job_id=job_id, tenant_id=tenant_id)
 
+        # Discover MCP tools for this tenant/client and build auth headers.
+        # Best-effort: missing creds or network errors skip MCP for this job.
+        async with phase("worker.mcp_discovery"):
+            try:
+                ghl_creds = await get_credentials(tenant_id, "ghl", msg.client_id)
+                ghl_headers = {
+                    "Authorization": f"Bearer {ghl_creds.access_token}",
+                    "locationId": ghl_creds.external_account_id,
+                }
+                await discover_and_register_tools(
+                    "ghl", tenant_id, msg.client_id, ghl_headers, default_registry
+                )
+            except Exception as exc:
+                log.info("worker.mcp_discovery.skipped", reason=str(exc))
+
+        # Load the living artifact and active skills for this thread.
+        from lyra_core.agent.living_artifact import load_artifact
+        from lyra_core.agent.skill_crystallizer import load_active_skills
+
+        async with phase("worker.load_context"):
+            try:
+                living_artifact = await load_artifact(tenant_id, msg.client_id, msg.agent_thread_id)
+                active_skills = await load_active_skills(tenant_id, msg.client_id)
+            except Exception as exc:
+                log.info("worker.load_context.skipped", reason=str(exc))
+                living_artifact = {}
+                active_skills = []
+
         initial_state = {
             "tenant_id": tenant_id,
+            "client_id": msg.client_id,
             "job_id": job_id,
             "channel_id": msg.channel_id,
             "thread_id": msg.thread_id,
@@ -126,6 +157,8 @@ async def _run(message_json: str) -> dict:
             "step_results": [],
             "artifacts": [],
             "total_cost_usd": 0.0,
+            "living_artifact": living_artifact,
+            "active_skills": active_skills,
         }
 
         config = {"configurable": {"thread_id": thread_id}}
