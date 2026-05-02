@@ -176,7 +176,7 @@ def upgrade() -> None:
     op.execute("""
         INSERT INTO clients (id, tenant_id, name, slug, status, created_at, updated_at)
         SELECT
-            gen_random_uuid()::text,
+            gen_random_uuid(),
             id,
             name || ' (internal)',
             'agency_internal',

@@ -31,6 +31,7 @@ def test_all_tables_registered() -> None:
         "campaigns",
         "workspace_artifacts",
         "skills",
+        "admin_users",
     }
     assert set(Base.metadata.tables.keys()) == expected
 
