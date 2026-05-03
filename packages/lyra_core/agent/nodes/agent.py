@@ -232,6 +232,15 @@ def _serialize_assistant_message(msg: Any) -> dict[str, Any]:
             }
             for tc in tool_calls
         ]
+    # DeepSeek thinking mode rejects follow-up calls unless the assistant's
+    # prior `reasoning_content` is echoed back. LiteLLM exposes it as
+    # `reasoning_content` (and/or `thinking_blocks` for Anthropic-style).
+    reasoning = getattr(msg, "reasoning_content", None)
+    if reasoning:
+        out["reasoning_content"] = reasoning
+    thinking_blocks = getattr(msg, "thinking_blocks", None)
+    if thinking_blocks:
+        out["thinking_blocks"] = thinking_blocks
     return out
 
 

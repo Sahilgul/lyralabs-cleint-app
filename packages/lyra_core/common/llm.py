@@ -83,6 +83,29 @@ def _restore_tool_call_names(response: ModelResponse, name_map: dict[str, str]) 
         logger.warning("llm.tool_name_restore_failed", error=str(exc))
 
 
+def _filter_reasoning_fields(
+    messages: list[dict[str, Any]], provider_key: str
+) -> list[dict[str, Any]]:
+    keep_reasoning = provider_key == "deepseek"
+    keep_thinking = provider_key == "anthropic"
+    if keep_reasoning and keep_thinking:
+        return messages
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if m.get("role") != "assistant" or (
+            "reasoning_content" not in m and "thinking_blocks" not in m
+        ):
+            out.append(m)
+            continue
+        m_copy = dict(m)
+        if not keep_reasoning:
+            m_copy.pop("reasoning_content", None)
+        if not keep_thinking:
+            m_copy.pop("thinking_blocks", None)
+        out.append(m_copy)
+    return out
+
+
 async def chat(
     *,
     tier: ModelTier,
@@ -106,6 +129,12 @@ async def chat(
     direct provider (Anthropic, Gemini).
     """
     resolved = await resolve(tier.value)  # type: ignore[arg-type]
+
+    # Provider-specific reasoning echo: DeepSeek's thinking mode requires the
+    # prior assistant `reasoning_content` to be passed back; Anthropic uses
+    # `thinking_blocks`. Other providers don't know these fields and may
+    # reject them, so strip them when targeting anything else.
+    messages = _filter_reasoning_fields(messages, resolved.provider_key)
 
     kwargs: dict[str, Any] = {
         "model": resolved.model_id,
