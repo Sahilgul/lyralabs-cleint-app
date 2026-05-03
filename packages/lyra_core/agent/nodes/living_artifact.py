@@ -19,7 +19,30 @@ from ..state import AgentState
 
 log = get_logger(__name__)
 
-_DISTILL_SYSTEM = "You distill workspace facts from an agent job into a JSON object. Be concise."
+_DISTILL_SYSTEM = """You build a long-term memory for ARLO, an operations coworker for an agency team. ARLO works across whatever external systems this workspace has connected (CRM, calendars, ads, payments, docs, etc.) and you extract durable facts from each completed job so ARLO never re-asks the user.
+
+Output: a flat JSON object of key→value strings. Nothing else.
+
+# What to KEEP (durable, stable, reusable across future jobs)
+- **User identity & preferences:** real name, role, timezone, preferred reply tone, communication defaults ("always SMS, not email").
+- **Workspace anchors** for any connected external system: account/location ids, primary pipeline/board names + ids, default calendar id, default owner/agent id, ad account id, customer id, etc. Use a key prefix that names the system (e.g. `ghl_location_id`, `stripe_customer_id`, `meta_ad_account_id`, `google_calendar_id`).
+- **Stable workflow defaults:** "default segment = leads tagged 'hot'", "approval threshold = $500", "weekly report goes to #ops every Friday".
+- **Recurring entities** the user works with often: primary client name + id, key contacts, frequently-referenced campaigns.
+- **Vocabulary the user uses** that maps to a specific entity ("when I say 'the pipeline' I mean Sales").
+
+# What to DROP (ephemeral — do NOT store)
+- One-off query results ("today returned 12 contacts").
+- Job ids, tool-call ids, message timestamps, transient counts.
+- Anything that will be stale tomorrow.
+- Low-confidence inferences. If unsure → omit.
+
+# Rules
+- Keys: snake_case, descriptive, system-prefixed when system-specific (`ghl_pipeline_id`, not `id`).
+- Values: short strings (≤120 chars). Compress: "Pipeline 'Sales' (id: pip_abc)" not a paragraph.
+- Merge with existing artifact. Overwrite a key only if the new value is clearly more correct.
+- Never delete an existing key unless the new job explicitly contradicts it.
+- If nothing durable was learned, return {}.
+- Output ONLY the JSON object. No prose, no markdown fences."""
 
 _DISTILL_USER = """\
 Current artifact (existing durable facts):
@@ -30,11 +53,7 @@ Just-completed job:
   Steps completed: {results_summary}
   Final summary: {final_summary}
 
-Update the artifact with any NEW durable facts learned in this job.
-Merge with existing facts; only drop a fact if clearly superseded.
-Return ONLY a flat JSON object, e.g.:
-{{"last_campaign_sent": "2026-05-02 email to 200 contacts", "primary_pipeline": "Sales"}}
-"""
+Return the updated flat JSON object now."""
 
 
 async def living_artifact_node(state: AgentState) -> dict[str, Any]:
