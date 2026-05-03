@@ -65,7 +65,7 @@ steps:
       - --quiet
     waitFor: [push]
 
-  # Deploy to VM worker via SSH
+  # Deploy to VM worker via direct SSH
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: deploy-worker
     entrypoint: bash
@@ -77,12 +77,14 @@ steps:
           --format="value(image_summary.digest)" \
           --project=clinicalcopilot)
         SHA=$${DIGEST#sha256:}
-        gcloud compute ssh lyralabs-worker-2 \
-          --zone=us-east1-b \
-          --project=clinicalcopilot \
-          --tunnel-through-iap \
-          --command="sh ~/lyralabs/deploy.sh $$SHA" \
-          --ssh-flag="-o StrictHostKeyChecking=no"
+        echo "$$CLOUDBUILD_SSH_KEY" > /tmp/cb_ssh_key
+        chmod 600 /tmp/cb_ssh_key
+        ssh -i /tmp/cb_ssh_key \
+          -o StrictHostKeyChecking=no \
+          muhammadsahil564@34.75.67.127 \
+          "sh ~/lyralabs/deploy.sh $$SHA"
+        rm /tmp/cb_ssh_key
+    secretEnv: ['CLOUDBUILD_SSH_KEY']
     waitFor: [deploy-cloudrun]
 
   # Notify Slack — deployed successfully
@@ -107,6 +109,11 @@ images:
 
 substitutions:
   _SLACK_WEBHOOK_URL: ''
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/clinicalcopilot/secrets/cloudbuild-ssh-key/versions/latest
+      env: 'CLOUDBUILD_SSH_KEY'
 
 options:
   logging: CLOUD_LOGGING_ONLY
