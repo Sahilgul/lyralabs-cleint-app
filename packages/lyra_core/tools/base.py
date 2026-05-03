@@ -96,6 +96,22 @@ class Tool(ABC, Generic[InT, OutT]):
     async def run(self, ctx: ToolContext, args: InT) -> OutT:
         """Implement the side-effecting work."""
 
+    def validate_args(self, args: dict[str, Any]) -> str | None:
+        """Type-check `args` against this tool's input schema.
+
+        Returns an error message if `args` would be rejected at execution
+        time (missing required fields, wrong types). Returns None on success.
+
+        Default implementation validates against `self.Input`. MCP-discovered
+        tools override this because their per-instance JSON schema lives on
+        the wrapped LangChain BaseTool, not on the shared `Input` model.
+        """
+        try:
+            self.Input(**args)
+        except Exception as exc:
+            return str(exc)
+        return None
+
     async def simulate(self, ctx: ToolContext, args: InT) -> str:
         """Return a human-readable preview of what run() would do.
 

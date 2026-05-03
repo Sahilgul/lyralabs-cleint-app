@@ -8,9 +8,11 @@ import pytest
 from lyra_core.agent.nodes import approval as approval_mod
 from lyra_core.agent.nodes.approval import (
     _plan_preview_blocks,
-    approval_node,
+    approval_post_node,
+    approval_wait_node,
     rejected_reply_node,
     route_after_approval,
+    route_after_approval_post,
 )
 from lyra_core.agent.state import Plan, PlanStep
 from lyra_core.tools.base import RiskProfile, TrustTier
@@ -56,6 +58,17 @@ class TestRouteAfterApproval:
         assert route_after_approval({}) == "rejected_reply"  # type: ignore[arg-type]
 
 
+class TestRouteAfterApprovalPost:
+    def test_needs_wait_routes_to_approval_wait(self) -> None:
+        assert route_after_approval_post({"needs_approval_wait": True}) == "approval_wait"  # type: ignore[arg-type]
+
+    def test_no_wait_routes_to_executor(self) -> None:
+        assert route_after_approval_post({"needs_approval_wait": False}) == "executor"  # type: ignore[arg-type]
+
+    def test_missing_flag_routes_to_executor(self) -> None:
+        assert route_after_approval_post({}) == "executor"  # type: ignore[arg-type]
+
+
 class TestPreviewBlocks:
     def test_includes_goal_steps_and_buttons(self) -> None:
         plan = _plan(has_write=True)
@@ -68,7 +81,7 @@ class TestPreviewBlocks:
         actions = blocks[2]
         assert actions["type"] == "actions"
         values = {b["value"] for b in actions["elements"]}
-        assert values == {"approve:job-1", "reject:job-1"}
+        assert values == {"approved:job-1", "rejected:job-1"}
         # write tag still present
         assert "_(write)_" in blocks[1]["text"]["text"]
 
@@ -99,7 +112,8 @@ class TestPreviewBlocks:
 
 
 @pytest.mark.asyncio
-async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) -> None:
+async def test_approval_post_node_posts_preview_and_signals_wait(monkeypatch) -> None:
+    """approval_post_node posts the card and returns needs_approval_wait=True."""
     plan = _plan(has_write=True)
     plan_dict = plan.model_dump()
     state = {
@@ -109,50 +123,44 @@ async def test_approval_node_posts_preview_then_returns_decision(monkeypatch) ->
         "channel_id": "ch",
         "tenant_id": "tenant-1",
     }
-    monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
-    monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "approved")
+    post_mock = AsyncMock()
+    monkeypatch.setattr(approval_mod, "post_reply", post_mock)
 
-    out = await approval_node(state)  # type: ignore[arg-type]
-    assert out["approval_decision"] == "approved"
+    out = await approval_post_node(state)  # type: ignore[arg-type]
+    assert out["needs_approval_wait"] is True
     assert out["plan"]["goal"] == "g"
     assert out["pending_plan"] is None
     assert "risk_profiles" in out
+    post_mock.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_approval_node_handles_dict_decision(monkeypatch) -> None:
-    plan = _plan(has_write=True)
-    state = {
-        "plan": plan.model_dump(),
-        "job_id": "j",
-        "thread_id": "t",
-        "channel_id": "c",
-        "tenant_id": "x",
-    }
-    monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
+async def test_approval_wait_node_returns_approved(monkeypatch) -> None:
+    state = {"job_id": "j"}
+    monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "approved")
+    out = await approval_wait_node(state)  # type: ignore[arg-type]
+    assert out["approval_decision"] == "approved"
+    assert out["needs_approval_wait"] is False
+
+
+@pytest.mark.asyncio
+async def test_approval_wait_node_handles_dict_decision(monkeypatch) -> None:
+    state = {"job_id": "j"}
     monkeypatch.setattr(approval_mod, "interrupt", lambda payload: {"decision": "rejected"})
-    out = await approval_node(state)  # type: ignore[arg-type]
+    out = await approval_wait_node(state)  # type: ignore[arg-type]
     assert out["approval_decision"] == "rejected"
 
 
 @pytest.mark.asyncio
-async def test_approval_node_unknown_decision_defaults_rejected(monkeypatch) -> None:
-    plan = _plan(has_write=True)
-    state = {
-        "plan": plan.model_dump(),
-        "job_id": "j",
-        "thread_id": "t",
-        "channel_id": "c",
-        "tenant_id": "x",
-    }
-    monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
+async def test_approval_wait_node_unknown_decision_defaults_rejected(monkeypatch) -> None:
+    state = {"job_id": "j"}
     monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "garbage")
-    out = await approval_node(state)  # type: ignore[arg-type]
+    out = await approval_wait_node(state)  # type: ignore[arg-type]
     assert out["approval_decision"] == "rejected"
 
 
 @pytest.mark.asyncio
-async def test_approval_node_reads_pending_plan_in_unified_mode(monkeypatch) -> None:
+async def test_approval_post_node_reads_pending_plan(monkeypatch) -> None:
     plan = _plan(has_write=True)
     plan_dict = plan.model_dump()
     state = {
@@ -163,17 +171,15 @@ async def test_approval_node_reads_pending_plan_in_unified_mode(monkeypatch) -> 
         "tenant_id": "tenant-1",
     }
     monkeypatch.setattr(approval_mod, "post_reply", AsyncMock())
-    monkeypatch.setattr(approval_mod, "interrupt", lambda payload: "approved")
 
-    out = await approval_node(state)  # type: ignore[arg-type]
-    assert out["approval_decision"] == "approved"
+    out = await approval_post_node(state)  # type: ignore[arg-type]
     assert out["plan"]["goal"] == plan_dict["goal"]
     assert out["pending_plan"] is None
 
 
 @pytest.mark.asyncio
-async def test_approval_node_auto_approves_low_only_plan(monkeypatch) -> None:
-    """A plan whose only step is a read tool auto-approves without interrupting."""
+async def test_approval_post_node_auto_approves_low_only_plan(monkeypatch) -> None:
+    """A plan whose only step is a read tool auto-approves without posting a card."""
     from lyra_core.tools.base import Tool, ToolContext, TrustTier
     from lyra_core.tools.registry import default_registry
     from pydantic import BaseModel
@@ -211,13 +217,11 @@ async def test_approval_node_auto_approves_low_only_plan(monkeypatch) -> None:
     }
     post_mock = AsyncMock()
     monkeypatch.setattr(approval_mod, "post_reply", post_mock)
-    interrupt_called = []
-    monkeypatch.setattr(approval_mod, "interrupt", lambda p: interrupt_called.append(p))
 
-    out = await approval_node(state)  # type: ignore[arg-type]
+    out = await approval_post_node(state)  # type: ignore[arg-type]
     assert out["approval_decision"] == "approved"
-    assert not interrupt_called  # no interrupt for all-LOW plans
-    post_mock.assert_not_called()  # no Block Kit card posted
+    assert out["needs_approval_wait"] is False
+    post_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ def test_graph_has_expected_nodes() -> None:
     """Unified graph: agent + tool_node + approval/executor/critic. No legacy nodes."""
     g = build_agent_graph(MemorySaver())
     nodes = set(g.nodes.keys())
-    expected = {"agent", "tool_node", "approval", "rejected_reply", "executor", "critic"}
+    expected = {"agent", "tool_node", "approval_post", "approval_wait", "rejected_reply", "executor", "critic"}
     assert expected <= nodes
     for legacy in ("classifier", "planner", "smalltalk_reply"):
         assert legacy not in nodes

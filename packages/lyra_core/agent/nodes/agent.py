@@ -201,9 +201,43 @@ def _submit_plan_tool_schema() -> dict[str, Any]:
 
 
 def _format_write_tools(write_tools: list[Any]) -> str:
+    """Render each write tool with its required-fields list.
+
+    The LLM only sees write tools through this prompt fragment — they aren't
+    exposed as direct OpenAI function-calling tools (the only directly
+    callable write tool is `submit_plan_for_approval`). Without listing
+    required fields here, the model has to guess what to put in each step's
+    `args`, which produced the user-reported `args: {}` failures.
+    """
     if not write_tools:
         return "(no write tools registered)"
-    return "\n".join(f"  - {t.name}: {t.description}" for t in write_tools)
+
+    lines: list[str] = []
+    for t in write_tools:
+        try:
+            schema = t.Input.model_json_schema()
+        except Exception:
+            schema = {}
+        properties = schema.get("properties") or {}
+        required = schema.get("required") or []
+
+        if required:
+            field_descs = []
+            for field_name in required:
+                field_info = properties.get(field_name) or {}
+                field_type = field_info.get("type", "any")
+                field_descs.append(f"{field_name}:{field_type}")
+            args_hint = f"  args (required): {{{', '.join(field_descs)}}}"
+        elif properties:
+            # No required fields, but show available ones so the model can
+            # populate at least something useful.
+            optional = ", ".join(f"{n}:{p.get('type', 'any')}" for n, p in list(properties.items())[:8])
+            args_hint = f"  args (all optional): {{{optional}{'...' if len(properties) > 8 else ''}}}"
+        else:
+            args_hint = "  args: (schema unavailable — match the tool description)"
+
+        lines.append(f"  - {t.name}: {t.description}\n{args_hint}")
+    return "\n".join(lines)
 
 
 def _format_facts(facts: dict[str, Any]) -> str:
@@ -315,6 +349,41 @@ def _extract_submit_plan_call(
                 args = {}
             return args, tc.get("id")
     return None, None
+
+
+def _validate_plan_step_args(plan: Plan) -> str | None:
+    """Type-check every step's args against the tool's Input schema.
+
+    Returns an error message (intended to be fed back to the LLM via a tool
+    response) if any step has missing required fields or wrong types. Returns
+    None when every step would pass schema validation at execution time.
+
+    This catches the common failure mode where the model emits `args: {}` for
+    a write step. Without this, the empty args propagate to the executor,
+    fail the upstream API with a 422, and ARLO posts a confusing "I couldn't
+    do it even though I provided everything" message. Catching it here turns
+    that into a deterministic re-prompt the model can self-correct from.
+    """
+    for step in plan.steps:
+        try:
+            tool = default_registry.get(step.tool_name)
+        except KeyError:
+            # Unknown tool — handled later when the executor tries to run it.
+            # We don't reject here because tool discovery is per-tenant and the
+            # registry may not be fully populated when this runs.
+            continue
+        # tool.validate_args dispatches to the right schema: native tools
+        # check their `Input` Pydantic model; MCP tools check the per-tool
+        # JSON schema discovered from the upstream server.
+        err = tool.validate_args(step.args)
+        if err is not None:
+            return (
+                f"Plan rejected: step '{step.id}' calls `{step.tool_name}` "
+                f"with invalid args ({step.args}). Error: {err}. "
+                "Re-issue submit_plan_for_approval with every required "
+                "field populated for each step."
+            )
+    return None
 
 
 async def agent_node(state: AgentState) -> dict[str, Any]:
@@ -429,6 +498,25 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
                     },
                 ],
             }
+        # Plan structure parsed cleanly. Now type-check every step's args
+        # against the tool's Input schema. Catches `args: {}` for write
+        # tools whose schemas require email/phone/firstName/etc. before the
+        # plan reaches the user as an approval card.
+        arg_error = _validate_plan_step_args(plan)
+        if arg_error is not None:
+            log.warning("agent.plan_step_args_invalid", error=arg_error[:200])
+            return {
+                **base_update,
+                "messages": [
+                    *new_history,
+                    {
+                        "role": "tool",
+                        "tool_call_id": plan_call_id,
+                        "content": arg_error,
+                    },
+                ],
+            }
+
         # Close the tool_call loop immediately so history is always valid.
         # Without this, a reject followed by a new user message produces an
         # assistant message with tool_calls but no tool response → DeepSeek 400.

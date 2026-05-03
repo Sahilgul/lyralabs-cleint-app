@@ -84,8 +84,36 @@ def test_approval_card_has_approve_and_reject_buttons():
         for el in block.get("elements", [])
     ]
 
-    assert any(v.startswith("approve:") for v in values), "Approve button missing"
-    assert any(v.startswith("reject:") for v in values), "Reject button missing"
+    assert any(v.startswith("approved:") for v in values), "Approve button missing"
+    assert any(v.startswith("rejected:") for v in values), "Reject button missing"
+
+
+def test_approval_button_values_match_approval_node_decision_set():
+    """
+    REGRESSION: button value after partition(":") must be in {"approved", "rejected"}.
+
+    Bug: buttons emitted "approve:job_id" and "reject:job_id".
+    After value.partition(":"), decision = "approve" which is NOT in
+    {"approved", "rejected"} → approval_node defaulted to "rejected"
+    on every Approve click.
+    """
+    job_id = "job-test"
+    plan = _simple_plan()
+    blocks = _plan_preview_blocks(plan, job_id=job_id, overall_tier=TrustTier.MEDIUM)
+
+    valid_decisions = {"approved", "rejected"}
+
+    for block in blocks:
+        for element in block.get("elements", []):
+            value = element.get("value", "")
+            if not value:
+                continue
+            decision, _, _ = value.partition(":")
+            assert decision in valid_decisions, (
+                f"Button value '{value}' produces decision='{decision}' after partition. "
+                f"Must be one of {valid_decisions} — otherwise approval_node defaults "
+                f"to 'rejected' even when user clicks Approve."
+            )
 
 
 def test_high_tier_plan_has_no_buttons():
@@ -117,5 +145,5 @@ def test_approval_card_job_id_embedded_in_button_values():
         for el in block.get("elements", [])
     ]
 
-    assert f"approve:{job_id}" in values, f"approve:{job_id} not found in button values"
-    assert f"reject:{job_id}" in values, f"reject:{job_id} not found in button values"
+    assert f"approved:{job_id}" in values, f"approved:{job_id} not found in button values"
+    assert f"rejected:{job_id}" in values, f"rejected:{job_id} not found in button values"

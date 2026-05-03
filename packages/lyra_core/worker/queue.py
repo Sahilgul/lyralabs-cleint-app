@@ -51,5 +51,7 @@ async def enqueue_resume_agent(*, job_id: str, decision: str, user_id: str) -> N
     pool = await _get_pool()
     await pool.enqueue_job(
         "resume_agent",
-        _kwargs={"job_id": job_id, "decision": decision, "user_id": user_id},
+        job_id=job_id,
+        decision=decision,
+        user_id=user_id,
     )

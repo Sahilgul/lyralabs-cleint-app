@@ -19,7 +19,7 @@ class PlanStep(BaseModel):
     depends_on: list[str] = Field(
         default_factory=list, description="ids of earlier steps whose output this one needs"
     )
-    # Populated by approval_node after trust classification.
+    # Populated by approval_post_node after trust classification.
     trust_tier: str = "medium"
     # Human-readable preview of what this step would do; set by rehearsal engine.
     simulation_preview: str | None = None
@@ -69,10 +69,11 @@ class AgentState(TypedDict, total=False):
     # --- working state ---
     # `plan` holds the approved/in-flight plan that the executor walks.
     # `agent_node` sets it via the `submit_plan_for_approval` meta-tool,
-    # then `approval_node` gates it before `executor_node` runs it.
+    # then the approval gate (approval_post → approval_wait) gates it
+    # before `executor_node` runs it.
     plan: dict[str, Any] | None  # serialized Plan
-    # The plan the agent wants to run, awaiting approval. `approval_node`
-    # copies `pending_plan` -> `plan` after a successful approve.
+    # The plan the agent wants to run, awaiting approval. `approval_post_node`
+    # copies `pending_plan` -> `plan` after running rehearsal.
     pending_plan: dict[str, Any] | None
     step_results: list[dict[str, Any]]
     approval_decision: Literal["approved", "rejected", "pending"] | None
@@ -81,7 +82,11 @@ class AgentState(TypedDict, total=False):
     error: str | None
     total_cost_usd: float
 
-    # Trust gradient: per-step RiskProfile dicts populated by approval_node.
+    # Set by approval_post_node to signal that approval_wait_node should interrupt.
+    # False for LOW-tier plans that auto-approve without user interaction.
+    needs_approval_wait: bool
+
+    # Trust gradient: per-step RiskProfile dicts populated by approval_post_node.
     risk_profiles: list[dict[str, Any]]
     # Living Artifact: durable per-thread workspace facts, distilled after each job.
     living_artifact: dict[str, Any]

@@ -31,7 +31,17 @@ _SETUP_DONE = False
 
 
 async def _get_pool() -> AsyncConnectionPool:
-    """Return the process-scoped connection pool, opening it on first call."""
+    """Return the process-scoped connection pool, opening it on first call.
+
+    `min_size=0` so worker startup doesn't block on a Postgres TLS handshake.
+    Connections are created lazily on first checkout; the pool stays warm
+    after that. Combined with arq's Redis pool initializing right before
+    this, the previous `min_size=1, wait=True` opener occasionally hit the
+    30s default timeout — fatal at startup, but transient (a TLS handshake
+    blip to Supabase). Lazy creation makes startup deterministic and pushes
+    any real connectivity failure to the first job, where it surfaces as a
+    normal phase error instead of crashing the whole worker.
+    """
     global _pool
     if _pool is not None:
         return _pool
@@ -42,12 +52,15 @@ async def _get_pool() -> AsyncConnectionPool:
         pg_url = settings.database_url_sync.replace("postgresql+psycopg://", "postgresql://")
         pool = AsyncConnectionPool(
             conninfo=pg_url,
-            min_size=1,
+            min_size=0,
             max_size=4,
             kwargs={"autocommit": True, "prepare_threshold": 0},
             open=False,
         )
-        await pool.open(wait=True)
+        # `wait=False` returns as soon as the pool object is set up; it does
+        # NOT block on creating min_size connections (we have min_size=0
+        # anyway). Generous timeout for safety against future config changes.
+        await pool.open(wait=False, timeout=60)
         _pool = pool
         return _pool
 

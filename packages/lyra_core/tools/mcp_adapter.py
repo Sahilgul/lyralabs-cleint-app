@@ -27,19 +27,32 @@ def _build_provider_headers(provider: str, creds: Any) -> dict[str, str]:
 
 
 class McpInput(BaseModel):
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    """Fallback input model used only when an MCP tool has no discoverable
+    args_schema. Real MCP tools get their per-tool Pydantic model from
+    LangChain's `args_schema` and bypass this entirely.
+
+    Configured with `extra='allow'` so a stray submission against this fallback
+    keeps fields rather than silently dropping them — the previous default
+    (`extra='ignore'`) was the root cause of every MCP write call sending
+    `{}` to the upstream API regardless of what the LLM emitted.
+    """
+
+    model_config = {"extra": "allow"}
 
 
 class McpOutput(BaseModel):
     result: Any = None
 
 
-class McpToolAdapter(Tool[McpInput, McpOutput]):
+class McpToolAdapter(Tool[BaseModel, McpOutput]):
     """Wraps a discovered MCP tool in the Tool safety interface.
 
     Instances are created by `_make_mcp_tool_adapter` which builds a dynamic
-    subclass carrying the correct ClassVars (name, description, trust_tier, etc.)
-    so the registry and approval gate see them as normal Tool subclasses.
+    subclass whose `Input` ClassVar is the underlying MCP tool's args_schema
+    (a Pydantic model LangChain built from the JSON schema the MCP server
+    returned during discovery). That makes validation and execution use the
+    real per-tool schema instead of a generic `arguments: dict` envelope —
+    the latter silently dropped every populated field on Pydantic v2.
     """
 
     name: ClassVar[str]
@@ -56,7 +69,7 @@ class McpToolAdapter(Tool[McpInput, McpOutput]):
         self._server_key = server_key
         self._mcp_tool_name = mcp_tool_name
 
-    async def run(self, ctx: ToolContext, args: McpInput) -> McpOutput:
+    async def run(self, ctx: ToolContext, args: BaseModel) -> McpOutput:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         from .mcp_registry import MCP_SERVER_CONFIGS
@@ -78,13 +91,34 @@ class McpToolAdapter(Tool[McpInput, McpOutput]):
             raise ToolError(
                 f"MCP tool {self._mcp_tool_name!r} not found on server {self._server_key!r}"
             )
-        result = await tool.ainvoke(args.arguments)
+        # Pass every populated field through to the MCP tool. model_dump
+        # excludes unset fields when the schema has optional+default fields,
+        # which prevents us from sending `null` for things the MCP server
+        # treats as "not provided".
+        payload = args.model_dump(exclude_unset=True, exclude_none=True)
+        result = await tool.ainvoke(payload)
         return McpOutput(result=result)
 
-    async def simulate(self, ctx: ToolContext, args: McpInput) -> str:
+    async def simulate(self, ctx: ToolContext, args: BaseModel) -> str:
         import json
 
-        return f"Will call `{self.name}` with:\n{json.dumps(args.arguments, indent=2)}"
+        payload = args.model_dump(exclude_unset=True, exclude_none=True)
+        return f"Will call `{self.name}` with:\n{json.dumps(payload, indent=2, default=str)}"
+
+
+def _resolve_input_schema(lc_tool: Any) -> type[BaseModel]:
+    """Pull the real per-tool args schema off a LangChain BaseTool, falling
+    back to McpInput if it isn't a Pydantic model.
+
+    LangChain's MCP adapter builds `args_schema` from each MCP tool's
+    inputSchema (JSON Schema) — that's what carries the required-fields
+    list (email, firstName, etc.) and types we need both for LLM-facing
+    function specs AND for validating step.args before execution.
+    """
+    schema = getattr(lc_tool, "args_schema", None)
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return schema
+    return McpInput
 
 
 def _make_mcp_tool_adapter(
@@ -95,7 +129,19 @@ def _make_mcp_tool_adapter(
     profile: RiskProfile,
     provider: str,
 ) -> McpToolAdapter:
-    """Build a McpToolAdapter subclass with the correct ClassVars for one MCP tool."""
+    """Build a McpToolAdapter subclass with the correct ClassVars for one MCP tool.
+
+    Critically: each adapter's `Input` is the per-tool Pydantic schema
+    discovered from the MCP server, NOT the generic `McpInput` envelope.
+    This is what makes:
+      - the LLM's function-calling schema reflect the real fields (so the
+        agent populates email/firstName/lastName instead of guessing);
+      - the executor's `tool.Input(**step.args)` actually carry those
+        fields through to the upstream call instead of silently dropping
+        them (Pydantic v2 default `extra='ignore'`);
+      - the validator catch missing required fields before the user is
+        asked to approve an unexecutable plan.
+    """
     cls = type(
         f"Mcp_{mcp_tool_name.replace('-', '_').replace('.', '_')}",
         (McpToolAdapter,),
@@ -106,7 +152,7 @@ def _make_mcp_tool_adapter(
             "trust_tier": profile.tier,
             "blast_radius": profile.blast_radius,
             "provider": provider,
-            "Input": McpInput,
+            "Input": _resolve_input_schema(lc_tool),
             "Output": McpOutput,
         },
     )

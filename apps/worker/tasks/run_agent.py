@@ -42,7 +42,7 @@ from lyra_core.tools import slack as _slack  # noqa: F401
 from lyra_core.tools.credentials import get_credentials
 from lyra_core.tools.mcp_registry import discover_and_register_tools
 from lyra_core.tools.registry import default_registry
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 log = get_logger(__name__)
 
@@ -278,12 +278,37 @@ async def _resume(ctx: dict, *, job_id: str, decision: str, user_id: str) -> dic
     try:
         async with phase("resume.lookup_and_record_approval"):
             async with async_session() as s:
+                # Atomically claim the resume: only one concurrent click wins.
+                # If two button clicks arrive in parallel, only one observes
+                # status='awaiting_approval' and flips it to 'resuming'; the
+                # loser sees 0 affected rows and bails. This closes the TOCTOU
+                # window between the read and the write that a select-then-check
+                # leaves open.
+                claim = await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == "awaiting_approval")
+                    .values(status="resuming")
+                    .returning(Job.id)
+                )
+                if claim.first() is None:
+                    # Either the job doesn't exist, or another resume already
+                    # claimed it. Look up status for an informative log line.
+                    existing = (
+                        await s.execute(select(Job).where(Job.id == job_id))
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        log.error("resume_agent.no_job")
+                        return {"status": "no_job"}
+                    log.info(
+                        "resume_agent.already_processed",
+                        job_status=existing.status,
+                    )
+                    return {"status": "already_processed", "job_id": job_id}
+
+                # Claim succeeded — load the rest of the job fields we need.
                 job = (
                     await s.execute(select(Job).where(Job.id == job_id))
-                ).scalar_one_or_none()
-                if job is None:
-                    log.error("resume_agent.no_job")
-                    return {"status": "no_job"}
+                ).scalar_one()
                 thread_id = job.thread_id
                 tenant_id = job.tenant_id
                 channel_id = job.channel_id

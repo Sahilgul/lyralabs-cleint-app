@@ -1,4 +1,4 @@
-.PHONY: help gen-key dev dev-api dev-worker dev-redis migrate test test-regression test-watch test-coverage lint type fmt clean
+.PHONY: help gen-key dev dev-api dev-worker dev-worker-socket dev-redis migrate test test-regression test-watch test-coverage lint type fmt clean
 
 help:
 	@echo "Docker dev:    dev"
@@ -29,6 +29,9 @@ dev-api:
 dev-worker:
 	PYTHONPATH=packages:. .venv/bin/python -m arq apps.worker.arq_app.WorkerSettings
 
+dev-socket:
+	PYTHONPATH=packages:. .venv/bin/python -m apps.socket_listener.main
+
 migrate:
 	PYTHONPATH=packages:. .venv/bin/alembic upgrade head
 
@@ -36,7 +39,7 @@ test:
 	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/unit -q
 
 test-regression:
-	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/regression/regression_test1.py tests/regression/regression_test2.py tests/regression/regression_test3.py -v
+	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/regression/regression_test1.py tests/regression/regression_test2.py tests/regression/regression_test3.py tests/regression/regression_test4.py tests/regression/regression_test5.py tests/regression/regression_test6.py tests/regression/regression_test7.py -v
 
 test-watch:
 	APP_ENV=test PYTHONPATH=packages:. pytest tests/unit -q --tb=short --maxfail=1 -x

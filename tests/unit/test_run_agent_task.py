@@ -66,10 +66,33 @@ class _FakeSession:
     async def __aexit__(self, *_):
         return False
 
-    async def execute(self, _stmt):
+    async def execute(self, stmt):
+        from sqlalchemy.sql import Update
+
         r = MagicMock()
-        # Naive: prefer job over tenant if one is set on this session
-        r.scalar_one_or_none.return_value = self.job if self.job is not None else self.tenant
+        # _resume's atomic claim uses `update(Job).returning(Job.id).first()`.
+        # For an UPDATE, first() should return a row tuple iff a job exists
+        # AND its current status is 'awaiting_approval' (the WHERE clause).
+        # For a SELECT, scalar_one_or_none / scalar_one should return the
+        # row or None. Use isinstance rather than string-matching since
+        # column names like `tenants.updated_at` contain the substring
+        # "UPDATE" and would false-positive a substring check.
+        is_update = isinstance(stmt, Update)
+        if is_update:
+            if self.job is not None and getattr(self.job, "status", None) == "awaiting_approval":
+                # Simulate the conditional update succeeding: status flips
+                # to 'resuming' and one row is returned.
+                self.job.status = "resuming"
+                r.first.return_value = (self.job.id,)
+            else:
+                # No row matched the WHERE clause (job missing or already
+                # claimed by a concurrent resume).
+                r.first.return_value = None
+            return r
+        # SELECT path.
+        target = self.job if self.job is not None else self.tenant
+        r.scalar_one_or_none.return_value = target
+        r.scalar_one.return_value = target
         return r
 
     def add(self, obj):

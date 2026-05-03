@@ -223,17 +223,37 @@ def _register_event_handlers(app: AsyncApp) -> None:
         log.info("slack.tokens_revoked", team_id=team_id)
         await _disable_workspace(team_id)
 
-    async def _handle_approval_action(ack: Any, body: dict[str, Any]) -> None:
+    async def _handle_approval_action(ack: Any, body: dict[str, Any], client: Any) -> None:
         """User clicked Approve/Reject button on a preview card."""
         await ack()
         from lyra_core.worker.queue import enqueue_resume_agent  # noqa: PLC0415
 
         action = body["actions"][0]
-        value = action.get("value", "")  # "approve:<job_id>" | "reject:<job_id>"
+        value = action.get("value", "")  # "approved:<job_id>" | "rejected:<job_id>"
         decision, _, job_id = value.partition(":")
         await enqueue_resume_agent(
             job_id=job_id, decision=decision, user_id=body["user"]["id"]
         )
+
+        # Replace the buttons with a status line so the card doesn't stay interactive.
+        label = "✅ Approved — running now." if decision == "approved" else "❌ Rejected — nothing was changed."
+        message = body.get("message", {})
+        existing_blocks = message.get("blocks", [])
+        # Keep header + body blocks, drop the actions block, append status.
+        updated_blocks = [b for b in existing_blocks if b.get("type") != "actions"]
+        updated_blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": label},
+        })
+        try:
+            await client.chat_update(
+                channel=body["channel"]["id"],
+                ts=message.get("ts"),
+                blocks=updated_blocks,
+                text=label,
+            )
+        except Exception:
+            pass  # non-critical — card update failure shouldn't block execution
 
     app.action("approval_approve")(_handle_approval_action)
     app.action("approval_reject")(_handle_approval_action)

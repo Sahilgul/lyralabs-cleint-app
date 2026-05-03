@@ -320,7 +320,7 @@ class Job(Base):
     user_request: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         String(32), default="queued"
-    )  # queued|running|awaiting_approval|done|failed|rejected
+    )  # queued|running|awaiting_approval|resuming|done|failed|rejected
     plan_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_urls: Mapped[list[str]] = mapped_column(JSON, default=list)

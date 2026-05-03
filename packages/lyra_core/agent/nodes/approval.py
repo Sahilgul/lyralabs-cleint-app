@@ -119,14 +119,14 @@ def _plan_preview_blocks(
                         "type": "button",
                         "style": "primary",
                         "text": {"type": "plain_text", "text": "Approve"},
-                        "value": f"approve:{job_id}",
+                        "value": f"approved:{job_id}",
                         "action_id": "approval_approve",
                     },
                     {
                         "type": "button",
                         "style": "danger",
                         "text": {"type": "plain_text", "text": "Reject"},
-                        "value": f"reject:{job_id}",
+                        "value": f"rejected:{job_id}",
                         "action_id": "approval_reject",
                     },
                 ],
@@ -135,26 +135,25 @@ def _plan_preview_blocks(
     return blocks
 
 
-async def approval_node(state: AgentState) -> dict[str, Any]:
-    """Classify trust tiers, run rehearsal, post preview, conditionally interrupt.
+async def approval_post_node(state: AgentState) -> dict[str, Any]:
+    """Phase 1: classify plan, run rehearsal, post the preview card.
 
-    LOW-only plans auto-approve without interrupting the graph.
-    MEDIUM plans post an Approve/Reject Block Kit card and interrupt.
-    HIGH plans post a confirmation card and interrupt for text "I confirm".
+    This node completes and is checkpointed before the interrupt fires.
+    LOW-only plans are auto-approved here with no card and no interrupt.
+    MEDIUM/HIGH plans post a card and set needs_approval_wait=True so the
+    next node (approval_wait_node) knows to interrupt.
     """
     from ...tools.registry import default_registry
 
     plan_dict = state.get("pending_plan") or state.get("plan")
     plan = Plan.model_validate(plan_dict)
 
-    # Classify each step.
     profiles: list[RiskProfile] = []
     for step in plan.steps:
         try:
             tool = default_registry.get(step.tool_name)
             profile = classify_step(step, tool)
         except KeyError:
-            # Unknown tool (not yet discovered) defaults to MEDIUM.
             profile = RiskProfile(
                 tier=TrustTier.MEDIUM, reversibility="reversible", blast_radius="single"
             )
@@ -171,16 +170,16 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
         for p in profiles
     ]
 
-    # All-LOW plans execute immediately — no user friction for read-only work.
+    # All-LOW plans execute immediately — no interrupt needed.
     if overall == TrustTier.LOW:
         return {
             "approval_decision": "approved",
+            "needs_approval_wait": False,
             "plan": plan.model_dump(),
             "pending_plan": None,
             "risk_profiles": risk_profiles_dicts,
         }
 
-    # Run concurrent rehearsal for every non-LOW step.
     previews = await _run_rehearsal(
         plan=plan,
         profiles=profiles,
@@ -204,6 +203,21 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
     )
     await post_reply(state["tenant_id"], reply)
 
+    return {
+        "needs_approval_wait": True,
+        "plan": plan.model_dump(),
+        "pending_plan": None,
+        "risk_profiles": risk_profiles_dicts,
+    }
+
+
+async def approval_wait_node(state: AgentState) -> dict[str, Any]:
+    """Phase 2: block until the user clicks Approve or Reject.
+
+    This is the ONLY node that calls interrupt(). Because approval_post_node
+    already completed and was checkpointed, LangGraph resumes HERE on
+    button click — the card is never re-posted.
+    """
     decision = interrupt({"prompt": "approve_or_reject", "job_id": state["job_id"]})
     if isinstance(decision, dict):
         decision = decision.get("decision", "rejected")
@@ -212,10 +226,13 @@ async def approval_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "approval_decision": decision,
-        "plan": plan.model_dump(),
-        "pending_plan": None,
-        "risk_profiles": risk_profiles_dicts,
+        "needs_approval_wait": False,
     }
+
+
+def route_after_approval_post(state: AgentState) -> Literal["approval_wait", "executor"]:
+    """After posting the card, wait for input unless LOW-tier (already approved)."""
+    return "approval_wait" if state.get("needs_approval_wait") else "executor"
 
 
 def route_after_approval(state: AgentState) -> Literal["executor", "rejected_reply"]:

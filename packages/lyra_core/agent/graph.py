@@ -5,10 +5,11 @@ flowchart TD
   start([entry]) --> agent
   agent -- direct reply --> finish([end])
   agent -- read tool --> tool_node --> agent
-  agent -- submit_plan_for_approval --> approval
-  approval -- all-LOW auto-approved --> executor
-  approval -- MEDIUM/HIGH approved --> executor
-  approval -- rejected --> rejected_reply --> finish
+  agent -- submit_plan_for_approval --> approval_post
+  approval_post -- LOW auto-approved --> executor
+  approval_post -- MEDIUM/HIGH needs input --> approval_wait
+  approval_wait -- approved --> executor
+  approval_wait -- rejected --> rejected_reply --> finish
   executor --> critic --> living_artifact --> finish
 ```
 """
@@ -20,9 +21,11 @@ from langgraph.graph import END, START, StateGraph
 
 from .nodes.agent import agent_node, route_after_agent
 from .nodes.approval import (
-    approval_node,
+    approval_post_node,
+    approval_wait_node,
     rejected_reply_node,
     route_after_approval,
+    route_after_approval_post,
 )
 from .nodes.critic import critic_node
 from .nodes.executor import executor_node
@@ -36,7 +39,8 @@ def build_agent_graph(checkpointer: BaseCheckpointSaver):
 
     g.add_node("agent", agent_node)
     g.add_node("tool_node", tool_node)
-    g.add_node("approval", approval_node)
+    g.add_node("approval_post", approval_post_node)
+    g.add_node("approval_wait", approval_wait_node)
     g.add_node("rejected_reply", rejected_reply_node)
     g.add_node("executor", executor_node)
     g.add_node("critic", critic_node)
@@ -46,11 +50,16 @@ def build_agent_graph(checkpointer: BaseCheckpointSaver):
     g.add_conditional_edges(
         "agent",
         route_after_agent,
-        {"tool_node": "tool_node", "approval": "approval", END: END},
+        {"tool_node": "tool_node", "approval": "approval_post", END: END},
     )
     g.add_edge("tool_node", "agent")
     g.add_conditional_edges(
-        "approval",
+        "approval_post",
+        route_after_approval_post,
+        {"approval_wait": "approval_wait", "executor": "executor"},
+    )
+    g.add_conditional_edges(
+        "approval_wait",
         route_after_approval,
         {"executor": "executor", "rejected_reply": "rejected_reply"},
     )

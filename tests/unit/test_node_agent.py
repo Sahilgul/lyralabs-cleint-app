@@ -108,7 +108,11 @@ async def test_agent_node_submit_plan_sets_pending_plan(monkeypatch) -> None:
             {
                 "id": "step_1",
                 "tool_name": "google.docs.create",
-                "args": {"title": "Test"},
+                # Both title and body_text are required by the tool's Input
+                # schema. agent_node now validates step args against that
+                # schema before accepting the plan, so partial args are
+                # rejected (see regression_test7).
+                "args": {"title": "Test", "body_text": "hello"},
                 "rationale": "create the doc",
                 "requires_approval": True,
                 "depends_on": [],
