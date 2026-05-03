@@ -92,3 +92,14 @@ python_version = "3.12"
 strict_optional = true
 warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "weasyprint",
+    "plotly",
+    "plotly.*",
+    "googleapiclient",
+    "googleapiclient.*",
+    "botbuilder.*",
+]
+ignore_missing_imports = true
