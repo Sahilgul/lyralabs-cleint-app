@@ -77,14 +77,15 @@ steps:
           --format="value(image_summary.digest)" \
           --project=clinicalcopilot)
         SHA=$${DIGEST#sha256:}
-        echo "$$CLOUDBUILD_SSH_KEY" > /tmp/cb_ssh_key
+        gcloud secrets versions access latest \
+          --secret=cloudbuild-ssh-key \
+          --project=clinicalcopilot > /tmp/cb_ssh_key
         chmod 600 /tmp/cb_ssh_key
         ssh -i /tmp/cb_ssh_key \
           -o StrictHostKeyChecking=no \
           muhammadsahil564@34.75.67.127 \
           "sh ~/lyralabs/deploy.sh $$SHA"
         rm /tmp/cb_ssh_key
-    secretEnv: ['CLOUDBUILD_SSH_KEY']
     waitFor: [deploy-cloudrun]
 
   # Notify Slack — deployed successfully
@@ -109,11 +110,6 @@ images:
 
 substitutions:
   _SLACK_WEBHOOK_URL: ''
-
-availableSecrets:
-  secretManager:
-    - versionName: projects/clinicalcopilot/secrets/cloudbuild-ssh-key/versions/latest
-      env: 'CLOUDBUILD_SSH_KEY'
 
 options:
   logging: CLOUD_LOGGING_ONLY
