@@ -1,4 +1,19 @@
 steps:
+  # Notify Slack — build started
+  - name: 'curlimages/curl'
+    id: notify-start
+    entrypoint: curl
+    args:
+      - '-s'
+      - '-X'
+      - 'POST'
+      - '-H'
+      - 'Content-Type: application/json'
+      - '-d'
+      - |
+        {"text": "🚀 *Build started*", "attachments": [{"color": "#439FE0", "fields": [{"title": "Commit", "value": "$COMMIT_SHA", "short": true}, {"title": "Branch", "value": "$BRANCH_NAME", "short": true}]}]}
+      - '${_SLACK_WEBHOOK_URL}'
+
   # Build the image
   - name: 'gcr.io/cloud-builders/docker'
     id: build
@@ -9,6 +24,7 @@ steps:
       - -t
       - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:latest
       - .
+    waitFor: [notify-start]
 
   # Push both tags
   - name: 'gcr.io/cloud-builders/docker'
@@ -18,6 +34,22 @@ steps:
       - --all-tags
       - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app
     waitFor: [build]
+
+  # Notify Slack — build complete
+  - name: 'curlimages/curl'
+    id: notify-build-done
+    entrypoint: curl
+    args:
+      - '-s'
+      - '-X'
+      - 'POST'
+      - '-H'
+      - 'Content-Type: application/json'
+      - '-d'
+      - |
+        {"text": "🐳 *Build complete* — image pushed to Artifact Registry", "attachments": [{"color": "#439FE0", "fields": [{"title": "Commit", "value": "$COMMIT_SHA", "short": true}]}]}
+      - '${_SLACK_WEBHOOK_URL}'
+    waitFor: [push]
 
   # Deploy to Cloud Run (API)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -33,7 +65,7 @@ steps:
       - --quiet
     waitFor: [push]
 
-  # Get the digest and deploy to the VM worker
+  # Deploy to VM worker via SSH
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: deploy-worker
     entrypoint: bash
@@ -45,18 +77,36 @@ steps:
           --format="value(image_summary.digest)" \
           --project=clinicalcopilot)
         SHA=$${DIGEST#sha256:}
-        echo "Deploying SHA: $$SHA to VM worker"
-        gcloud compute ssh lyralabs-worker \
+        gcloud compute ssh lyralabs-worker-2 \
           --zone=us-east1-b \
           --project=clinicalcopilot \
           --tunnel-through-iap \
-          --command="sh /var/lyralabs/deploy.sh $$SHA" \
+          --command="sh ~/lyralabs/deploy.sh $$SHA" \
           --ssh-flag="-o StrictHostKeyChecking=no"
     waitFor: [deploy-cloudrun]
+
+  # Notify Slack — deployed successfully
+  - name: 'curlimages/curl'
+    id: notify-success
+    entrypoint: curl
+    args:
+      - '-s'
+      - '-X'
+      - 'POST'
+      - '-H'
+      - 'Content-Type: application/json'
+      - '-d'
+      - |
+        {"text": "✅ *Deployed successfully* — Cloud Run + VM worker updated", "attachments": [{"color": "good", "fields": [{"title": "Commit", "value": "$COMMIT_SHA", "short": true}, {"title": "Branch", "value": "$BRANCH_NAME", "short": true}]}]}
+      - '${_SLACK_WEBHOOK_URL}'
+    waitFor: [deploy-worker]
 
 images:
   - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:$COMMIT_SHA
   - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:latest
+
+substitutions:
+  _SLACK_WEBHOOK_URL: ''
 
 options:
   logging: CLOUD_LOGGING_ONLY
