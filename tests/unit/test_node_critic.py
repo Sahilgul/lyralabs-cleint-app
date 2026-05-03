@@ -7,7 +7,6 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-
 from lyra_core.agent.nodes import critic as critic_mod
 from lyra_core.agent.nodes.critic import critic_node, route_after_critic
 
@@ -36,7 +35,8 @@ async def test_critic_returns_summary(monkeypatch, mock_litellm_response) -> Non
 
     monkeypatch.setattr(critic_mod, "post_reply", fake_post)
     monkeypatch.setattr(
-        critic_mod, "chat",
+        critic_mod,
+        "chat",
         AsyncMock(
             return_value=mock_litellm_response(
                 json.dumps({"verdict": "ok", "summary_for_user": "All done!"}), cost=0.001
@@ -56,7 +56,8 @@ async def test_critic_returns_summary(monkeypatch, mock_litellm_response) -> Non
 async def test_critic_invalid_json_falls_back(monkeypatch, mock_litellm_response) -> None:
     monkeypatch.setattr(critic_mod, "post_reply", AsyncMock())
     monkeypatch.setattr(
-        critic_mod, "chat",
+        critic_mod,
+        "chat",
         AsyncMock(return_value=mock_litellm_response("garbage")),
     )
 
@@ -74,7 +75,8 @@ async def test_critic_attaches_artifacts_to_reply(monkeypatch, mock_litellm_resp
 
     monkeypatch.setattr(critic_mod, "post_reply", fake_post)
     monkeypatch.setattr(
-        critic_mod, "chat",
+        critic_mod,
+        "chat",
         AsyncMock(
             return_value=mock_litellm_response(
                 json.dumps({"verdict": "ok", "summary_for_user": "done"})
@@ -100,7 +102,8 @@ async def test_critic_attaches_artifacts_to_reply(monkeypatch, mock_litellm_resp
 async def test_critic_handles_missing_plan(monkeypatch, mock_litellm_response) -> None:
     monkeypatch.setattr(critic_mod, "post_reply", AsyncMock())
     monkeypatch.setattr(
-        critic_mod, "chat",
+        critic_mod,
+        "chat",
         AsyncMock(
             return_value=mock_litellm_response(
                 json.dumps({"verdict": "ok", "summary_for_user": "ok"})

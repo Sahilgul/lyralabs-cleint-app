@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from googleapiclient.errors import HttpError
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.google import docs as docs_mod
 from lyra_core.tools.google.docs import DocsCreate, DocsCreateInput
@@ -23,9 +22,7 @@ def _docs_svc(create_response=None):
 
 def _drive_svc(parents=None):
     s = MagicMock()
-    s.files.return_value.get.return_value.execute.return_value = {
-        "parents": parents or ["root"]
-    }
+    s.files.return_value.get.return_value.execute.return_value = {"parents": parents or ["root"]}
     return s
 
 

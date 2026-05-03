@@ -79,7 +79,7 @@ def _restore_tool_call_names(response: ModelResponse, name_map: dict[str, str]) 
                 current = getattr(fn, "name", None)
                 if current in name_map:
                     fn.name = name_map[current]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("llm.tool_name_restore_failed", error=str(exc))
 
 
@@ -128,7 +128,7 @@ async def chat(
     OpenAI-compat (Z.AI, Moonshot, MiniMax) while another is on a
     direct provider (Anthropic, Gemini).
     """
-    resolved = await resolve(tier.value)  # type: ignore[arg-type]
+    resolved = await resolve(tier.value)
 
     # Provider-specific reasoning echo: DeepSeek's thinking mode requires the
     # prior assistant `reasoning_content` to be passed back; Anthropic uses
@@ -199,6 +199,6 @@ async def chat(
 def estimate_cost(response: ModelResponse) -> float:
     """LiteLLM tracks usage cost on the response object."""
     try:
-        return float(response._hidden_params.get("response_cost") or 0.0)  # type: ignore[attr-defined]
+        return float(response._hidden_params.get("response_cost") or 0.0)
     except Exception:
         return 0.0

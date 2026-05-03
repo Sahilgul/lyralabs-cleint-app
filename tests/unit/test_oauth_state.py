@@ -6,9 +6,9 @@ import time
 
 import jwt
 import pytest
+from lyra_core.common.config import get_settings
 
 from apps.api.oauth._state import _STATE_TTL_SECONDS, decode_state, encode_state
-from lyra_core.common.config import get_settings
 
 
 def test_round_trip_with_redirect() -> None:
@@ -28,7 +28,9 @@ def test_round_trip_without_redirect() -> None:
 def test_token_includes_correct_claims() -> None:
     token = encode_state("t-1")
     settings = get_settings()
-    claims = jwt.decode(token, settings.admin_jwt_secret, algorithms=["HS256"], issuer=settings.admin_jwt_issuer)
+    claims = jwt.decode(
+        token, settings.admin_jwt_secret, algorithms=["HS256"], issuer=settings.admin_jwt_issuer
+    )
     assert claims["tid"] == "t-1"
     assert claims["iss"] == settings.admin_jwt_issuer
     assert claims["exp"] > time.time()

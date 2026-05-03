@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009485)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-523%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-554%20passing-brightgreen)](#testing)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -116,6 +116,14 @@ this hybrid topology keeps OAuth + Stripe webhooks on Cloud Run's
 HTTP-shaped scale-to-N, while the always-on Slack listener and the
 arq worker live where polling is cheap.
 
+**Why three separate processes, not one?**
+
+- **API must be on Cloud Run** — it needs a public HTTPS URL for OAuth callbacks and Stripe webhooks, and benefits from Cloud Run's scale-to-zero when idle.
+- **Socket listener must be always-on** — it holds a single persistent WebSocket to Slack. Cloud Run kills instances when idle, which would drop the connection. It lives on the VM so it's always running.
+- **Worker must be separate from the socket listener** — agent jobs take 30–90 seconds (LLM calls, tool chains, approval waits). If the worker and socket listener shared a process, a slow job would block new Slack events from being received. Keeping them separate means a crashed or busy worker never affects message intake.
+
+All three share one Docker image — they're just different `CMD` arguments at runtime.
+
 **Why Socket Mode for inbound events.** The HTTPS webhook path retries an
 event up to 3× when a 2xx isn't returned within 3 s, which on Cloud Run
 cold starts produced retry storms (4× duplicate `run_agent` tasks for one
@@ -199,11 +207,12 @@ lyralabs/
 │           ├── memory.py          4-tier memory (workspace facts cached 30 s + Qdrant collection)
 │           ├── checkpointer.py    LangGraph Postgres checkpointer wrapper (process-scoped pool singleton)
 │           ├── graph.py           Wires the StateGraph
-│           └── nodes/             agent (with history-trim), tool_node, approval, executor, critic, artifact
+│           └── nodes/             agent (with history-trim + plan-time arg validation), tool_node, approval_post, approval_wait, executor, critic, artifact
 │
 ├── tests/
 │   ├── conftest.py                Env shim + shared fixtures (mock_session, make_ctx, patch_chat …)
 │   ├── unit/  (523 tests)         One test file per source module — see Testing section
+│   ├── regression/ (31 tests)    Named regression_test1–7.py; run via `make test-regression`
 │   └── integration/               Reserved for tests that need real Postgres
 │
 ├── infra/
@@ -224,7 +233,7 @@ lyralabs/
 │   └── mint_admin_jwt.py          Dev-only: mint an admin JWT for a tenant
 │
 ├── alembic.ini                    Migrations config
-├── Makefile                       gen-key, dev, migrate, test, lint, type, fmt
+├── Makefile                       gen-key, dev, migrate, test, test-regression, lint, type, fmt
 ├── pyproject.toml                 uv/hatch project + ruff + mypy + pytest config
 └── .env.example                   Full env var template
 ```
@@ -238,34 +247,45 @@ flowchart TD
     start([entry]) --> agent
     agent -- direct reply --> finish([end])
     agent -- read tool --> tool_node --> agent
-    agent -- submit_plan_for_approval --> approval
-    approval -- approved --> executor --> critic --> finish
-    approval -- rejected --> rejected_reply --> finish
+    agent -- submit_plan_for_approval --> approval_post
+    approval_post -- LOW tier auto-approved --> executor
+    approval_post -- MEDIUM/HIGH needs input --> approval_wait
+    approval_wait -- approved --> executor
+    approval_wait -- rejected --> rejected_reply
+    executor --> critic --> finish
+    rejected_reply --> finish
 ```
 
 | Node             | Tier    | Role                                                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `agent`          | Primary | Single tool-using LLM. Replies directly, calls read tools, or emits a Plan via `submit_plan_for_approval`.          |
+| `agent`          | Primary | Single tool-using LLM. Replies directly, calls read tools, or emits a Plan via `submit_plan_for_approval`. Validates step args against each tool's input schema before routing — rejects the plan and re-prompts the model if any step would fail at execution time (e.g. missing required fields). |
 | `tool_node`      | —       | Executes read-tool calls and feeds results back into `agent`. Rejects any direct write-tool call (security guard).  |
-| `approval`       | —       | Posts the Plan as a Block Kit preview and `interrupt()`s the graph until the user clicks Approve / Reject.          |
+| `approval_post`  | —       | Classifies trust tiers, runs concurrent rehearsal, posts the Block Kit preview card, and checkpoints. LOW-only plans auto-approve here. MEDIUM/HIGH plans set `needs_approval_wait=True` and route to `approval_wait`. |
+| `approval_wait`  | —       | **Only node that calls `interrupt()`.** Because `approval_post` already completed and was checkpointed at the node boundary, LangGraph resumes here on button click — the card is never re-posted. |
 | `executor`       | —       | Walks approved plan steps in order, resolves `{{ step_X.field }}` placeholders, runs `tool.safe_run()`.             |
 | `critic`         | Primary | Validates results against the original ask, writes a friendly summary, attaches artifacts.                          |
 | `rejected_reply` | —       | Acknowledges rejection and asks what to change.                                                                     |
 
+**Why two approval nodes?** LangGraph re-runs an entire node body when resuming from `interrupt()`. If the card post and the interrupt lived in the same node, clicking Approve caused the card to be re-posted (duplicate with live buttons) before the interrupt returned. Splitting into a post-then-checkpoint node and a wait-only node eliminates the re-post entirely — the post is past the checkpoint boundary and never re-executed on resume.
+
 **State** (`AgentState`, TypedDict, total=False):
 ```
 tenant_id, job_id, channel_id, thread_id, user_id, user_request,
-plan, pending_plan, step_results, approval_decision,
+plan, pending_plan, needs_approval_wait, step_results, approval_decision,
 final_summary, artifacts, error, total_cost_usd, messages
 ```
 
-**Checkpointing**: every node return is persisted by the LangGraph Postgres checkpointer keyed by `thread_id`. When `interrupt()` fires inside `approval`, the worker exits cleanly and the graph can be resumed days later via `Command(resume={"decision": "approved"})`.
+**Checkpointing**: every node return is persisted by the LangGraph Postgres checkpointer keyed by `thread_id`. When `interrupt()` fires inside `approval_wait`, the worker exits cleanly and the graph can be resumed days later via `Command(resume={"decision": "approved"})`.
+
+**Resume deduplication**: `resume_agent` atomically flips `job.status` from `awaiting_approval` to `resuming` in a single `UPDATE … WHERE status='awaiting_approval' RETURNING id`. If two button clicks arrive concurrently, exactly one wins — the loser sees 0 affected rows and returns `already_processed` before acquiring the Redis thread lock or running the graph.
 
 ---
 
 ## Tools
 
 Every tool is a `Tool[InputT, OutputT]` with a Pydantic input/output schema, a unique name, and an optional `requires_approval` flag. They self-register in `default_registry` at import time, and the agent's tool catalog is generated from that registry — new tools light up automatically.
+
+The base `Tool` class exposes a `validate_args(args: dict) -> str | None` method that type-checks a proposed args dict against `self.Input` before plan submission. Returning a non-None error string causes `agent_node` to feed the error back to the LLM as a tool-response message in the same turn, prompting it to resubmit with complete args. This catches missing required fields (e.g. `email`, `firstName` for GHL contact creation) before the user ever sees an approval card for an unexecutable plan.
 
 ### Read-only (no approval)
 
@@ -312,9 +332,21 @@ instead of crashing on missing bot/user tokens.
 
 The executor lifts whatever the tool put into `ctx.extra["artifacts"]` onto the agent's `state.artifacts`, and the critic node attaches them to the outbound Slack reply (`files_upload_v2`).
 
-### GHL transport
+### MCP tool discovery (GHL + Slack)
 
-`tools/ghl/client.py` is a thin async httpx wrapper:
+GHL tools are discovered at job start via GoHighLevel's official MCP server (`https://services.leadconnectorhq.com/mcp/`). The LangChain `MultiServerMCPClient` connects once per job, fetches the tool list, and each tool is wrapped in a `McpToolAdapter` that's registered in the global tool registry.
+
+Key design decisions:
+
+- **Per-tool `Input` schema.** Each adapter's `Input` ClassVar is set to the per-tool Pydantic model built by LangChain from the MCP server's `inputSchema` — *not* a generic `arguments: dict` envelope. The generic envelope was the original design but silently dropped all args on Pydantic v2's default `extra='ignore'` setting, meaning every MCP write call sent `{}` to GHL and got back a 422 regardless of what was in the plan. Using the real schema means `tool.Input(**step.args)` both validates and passes the fields through.
+- **`validate_args` dispatch.** The base `Tool.validate_args(args: dict)` checks `self.Input`. Since MCP tool adapters now carry the real per-tool schema as `Input`, no override is needed.
+- **`exclude_unset=True` on execution.** `run()` calls `args.model_dump(exclude_unset=True, exclude_none=True)` before passing to `tool.ainvoke()`, so optional-with-default fields don't appear as `null` in the MCP payload.
+- **Trust classification.** Write tools (`contacts_create-contact`, `contacts_update-contact`, etc.) are listed in `MCP_SERVER_CONFIGS["ghl"].write_tools` → MEDIUM tier (Approve/Reject button). `conversations_send-a-new-message` is HIGH tier (text confirmation). Everything else defaults LOW and executes freely.
+- **24-hour discovery cache.** Tool discovery is cached per `(tenant_id, client_id, server_key)` to avoid hammering the MCP server on every job. Log line `mcp.tools_discovered` records count and server on each cache miss.
+
+The Slack MCP server (`mcp.slack.com`) is also wired — useful for workspaces where ARLO doesn't have a direct bot token but does have an MCP credential. The in-process Slack tools (see above) remain the primary path.
+
+`tools/ghl/client.py` (used by the legacy in-process GHL tools before the MCP migration) is a thin async httpx wrapper still used for custom GHL calls that aren't yet exposed by the MCP server:
 
 - Adds `Authorization`, `Version: 2021-07-28`, `Accept: application/json` headers.
 - Retries on `429` and `5xx` with `tenacity` exponential backoff (max 3 attempts).
@@ -596,10 +628,11 @@ make gen-key
 
 ## Testing
 
-**523 unit tests, 100% passing in ~8s.** Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
+**554 tests, 100% passing.** 523 unit tests (~72s) + 31 regression tests (~3s). Heavy I/O is mocked (`respx` for httpx, `unittest.mock` for googleapiclient / slack_sdk / weasyprint / plotly / stripe). No external service is hit.
 
 ```bash
-make test                         # run everything
+make test                         # 523 unit tests
+make test-regression              # 31 regression tests (named regression_test*.py)
 make test-watch                   # stop on first failure
 make test-coverage                # with coverage report
 ```
@@ -617,10 +650,24 @@ make test-coverage                # with coverage report
 | `tools/google/*`                                                |    35 |
 | `tools/ghl/*`                                                   |    39 |
 | `tools/artifacts/*` (pdf markdown, charts)                      |    18 |
-| `agent/` (state, memory + cache, all 7 nodes, graph wiring)     |    67 |
+| `agent/` (state, memory + cache, all 9 nodes, graph wiring)     |    67 |
 | `apps/api/*` (oauth state/google/ghl, admin auth+routes, admin_llm, stripe webhook, main) | 69 |
 | `apps/worker/*` (arq WorkerSettings, run_agent, resume_agent)   |    25 |
-| **Total**                                                       |  **523** |
+| **Unit total**                                                  |  **523** |
+| **Regression** (tests/regression/regression_test1–7.py)        |    31 |
+| **Grand total**                                                 |  **554** |
+
+### Regression test coverage
+
+| File | Bugs guarded |
+| ---- | ------------ |
+| `regression_test1.py` | Orphaned `tool_calls` after plan rejection causing DeepSeek 400 infinite retry |
+| `regression_test2.py` | `_drop_orphaned_tool_call_messages` history-healing logic |
+| `regression_test3.py` | Duplicate `action_id` on approval card buttons (Slack `invalid_blocks`) + button value partition |
+| `regression_test4.py` | `resume_agent` kwargs passed via `_kwargs` dict instead of directly |
+| `regression_test5.py` | Duplicate plan card on resume (LangGraph re-running `approval_node` body) — end-to-end `ainvoke → suspend → ainvoke(Command(resume=...))` cycle asserts `post_reply` called exactly once |
+| `regression_test6.py` | TOCTOU race in `resume_agent` dedup — atomic `UPDATE … WHERE status='awaiting_approval'` |
+| `regression_test7.py` | Empty `args: {}` propagating to GHL 422 — both native tool schema and MCP per-tool schema validation |
 
 ### Test design
 
@@ -636,6 +683,9 @@ make test-coverage                # with coverage report
 
 1. `IntegrationConnection` was missing the `tenant` relationship that satisfied `Tenant.integrations.back_populates="tenant"` — would have crashed on first ORM use.
 2. `common/logging.py` paired `structlog.stdlib.add_logger_name` with `PrintLogger` (no `.name` attr), throwing `AttributeError` on every error log. Replaced with `processors.add_log_level`.
+3. LangGraph re-runs the full node body when resuming an `interrupt()`. The approval card post and `interrupt()` were in the same node, so clicking Approve caused a second identical card to be posted. Fixed by splitting into `approval_post_node` (posts card → checkpoints) and `approval_wait_node` (`interrupt()` only).
+4. All MCP tool adapters shared a generic `McpInput(arguments: dict)` schema. Pydantic v2 default `extra='ignore'` silently dropped every populated field, making every MCP write call send `{}` to the upstream API → 422. Fixed by using `lc_tool.args_schema` as each adapter's `Input`.
+5. `resume_agent` used a SELECT-then-check for dedup (TOCTOU). Two concurrent button clicks could both see `status='awaiting_approval'` and both run the graph. Fixed by an atomic `UPDATE … WHERE status='awaiting_approval' RETURNING id`.
 
 ---
 

@@ -59,9 +59,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_skills_tenant_id", "skills", ["tenant_id"])
     op.create_index("ix_skills_client_id", "skills", ["client_id"])
-    op.create_unique_constraint(
-        "uq_skill_per_client", "skills", ["tenant_id", "client_id", "slug"]
-    )
+    op.create_unique_constraint("uq_skill_per_client", "skills", ["tenant_id", "client_id", "slug"])
 
 
 def downgrade() -> None:

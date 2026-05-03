@@ -8,7 +8,6 @@ the provider, broken tier hint) blows up here, not in production.
 from __future__ import annotations
 
 import pytest
-
 from lyra_core.llm.catalog import PROVIDERS, model_spec, provider_for_model
 
 _VALID_TIER_HINTS = {"primary", "cheap", "both", "embedding"}
@@ -50,8 +49,7 @@ class TestCatalogShape:
             for m in spec.known_models:
                 if m.id in seen and seen[m.id] != prov_key:
                     raise AssertionError(
-                        f"model id {m.id} is registered under both "
-                        f"{seen[m.id]} and {prov_key}"
+                        f"model id {m.id} is registered under both {seen[m.id]} and {prov_key}"
                     )
                 seen[m.id] = prov_key
 
@@ -61,15 +59,11 @@ class TestRequiredProviders:
 
     def test_qwen_present(self) -> None:
         assert "qwen" in PROVIDERS
-        assert any(
-            m.id == "dashscope/qwen-turbo" for m in PROVIDERS["qwen"].known_models
-        )
+        assert any(m.id == "dashscope/qwen-turbo" for m in PROVIDERS["qwen"].known_models)
 
     def test_deepseek_present(self) -> None:
         assert "deepseek" in PROVIDERS
-        assert any(
-            m.id == "deepseek/deepseek-chat" for m in PROVIDERS["deepseek"].known_models
-        )
+        assert any(m.id == "deepseek/deepseek-chat" for m in PROVIDERS["deepseek"].known_models)
 
 
 class TestLookupHelpers:

@@ -20,15 +20,16 @@ import jwt
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-
-from apps.api.admin.auth_routes import _mint_jwt, _TOKEN_TTL_HOURS, router as auth_router
 from lyra_core.common.config import get_settings
 from lyra_core.db.models import AdminUser, Client, Tenant
 
+from apps.api.admin.auth_routes import _TOKEN_TTL_HOURS, _mint_jwt
+from apps.api.admin.auth_routes import router as auth_router
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _app() -> FastAPI:
     app = FastAPI()
@@ -94,6 +95,7 @@ def _mock_register_sessions(existing_user=None, tenant_for_update=None):
 # UNIT TESTS — _mint_jwt()
 # ===========================================================================
 
+
 class TestMintJwt:
     def test_contains_all_required_claims(self):
         token = _mint_jwt("t-1", "a@b.com", "owner")
@@ -130,6 +132,7 @@ class TestMintJwt:
 # UNIT TESTS — password hashing (regression: plaintext must never be stored)
 # ===========================================================================
 
+
 class TestPasswordHashing:
     def test_hash_is_not_plaintext(self):
         pw = "supersecret"
@@ -157,17 +160,24 @@ class TestPasswordHashing:
 # BEHAVIOR TESTS — POST /admin/auth/register
 # ===========================================================================
 
+
 class TestRegister:
     @pytest.mark.asyncio
     async def test_success_returns_201_with_jwt(self):
         s1, s2 = _mock_register_sessions()
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "admin@x.com", "password": "securepass",
-                    "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "admin@x.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         assert r.status_code == 201
         data = r.json()
@@ -183,10 +193,17 @@ class TestRegister:
         s1, s2 = _mock_register_sessions()
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "new@example.com", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "new@example.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         assert r.status_code == 201
 
@@ -196,16 +213,23 @@ class TestRegister:
         stored: list = []
         s1, s2 = _mock_register_sessions()
 
-        original_add = s1.add
         def capture_add(obj):
             stored.append(obj)
+
         s1.add = capture_add
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "ADMIN@X.COM", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "ADMIN@X.COM",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         assert r.status_code == 201
         claims = _decode(r.json()["access_token"])
@@ -217,9 +241,14 @@ class TestRegister:
     @pytest.mark.asyncio
     async def test_wrong_passcode_returns_403(self):
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-            r = await c.post("/admin/auth/register", json={
-                "email": "a@x.com", "password": "securepass", "passcode": "0000",
-            })
+            r = await c.post(
+                "/admin/auth/register",
+                json={
+                    "email": "a@x.com",
+                    "password": "securepass",
+                    "passcode": "0000",
+                },
+            )
         assert r.status_code == 403
         assert "passcode" in r.json()["detail"]
 
@@ -229,27 +258,44 @@ class TestRegister:
         s1 = _mock_session_cm(execute_return=_scalar(existing))
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "admin@x.com", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "admin@x.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
         assert r.status_code == 409
         assert "already registered" in r.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_short_password_returns_422(self):
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-            r = await c.post("/admin/auth/register", json={
-                "email": "a@x.com", "password": "short", "passcode": "7172",
-            })
+            r = await c.post(
+                "/admin/auth/register",
+                json={
+                    "email": "a@x.com",
+                    "password": "short",
+                    "passcode": "7172",
+                },
+            )
         assert r.status_code == 422
 
     @pytest.mark.asyncio
     async def test_invalid_email_format_returns_422(self):
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-            r = await c.post("/admin/auth/register", json={
-                "email": "not-an-email", "password": "securepass", "passcode": "7172",
-            })
+            r = await c.post(
+                "/admin/auth/register",
+                json={
+                    "email": "not-an-email",
+                    "password": "securepass",
+                    "passcode": "7172",
+                },
+            )
         assert r.status_code == 422
 
     @pytest.mark.asyncio
@@ -266,10 +312,17 @@ class TestRegister:
         s1.add = lambda obj: stored.append(obj)
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                await c.post("/admin/auth/register", json={
-                    "email": "a@x.com", "password": "mypassword123", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "a@x.com",
+                        "password": "mypassword123",
+                        "passcode": "7172",
+                    },
+                )
 
         users = [obj for obj in stored if isinstance(obj, AdminUser)]
         assert users, "AdminUser was never passed to session.add()"
@@ -281,6 +334,7 @@ class TestRegister:
 # BEHAVIOR TESTS — POST /admin/auth/login
 # ===========================================================================
 
+
 class TestLogin:
     @pytest.mark.asyncio
     async def test_success_returns_200_with_jwt(self):
@@ -288,10 +342,16 @@ class TestLogin:
         s = _mock_session_cm(execute_return=_scalar(user))
 
         with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/login", json={
-                    "email": "admin@x.com", "password": "mypassword",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/login",
+                    json={
+                        "email": "admin@x.com",
+                        "password": "mypassword",
+                    },
+                )
 
         assert r.status_code == 200
         claims = _decode(r.json()["access_token"])
@@ -304,10 +364,16 @@ class TestLogin:
         s = _mock_session_cm(execute_return=_scalar(user))
 
         with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/login", json={
-                    "email": "admin@x.com", "password": "wrongpassword",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/login",
+                    json={
+                        "email": "admin@x.com",
+                        "password": "wrongpassword",
+                    },
+                )
         assert r.status_code == 401
 
     @pytest.mark.asyncio
@@ -315,10 +381,16 @@ class TestLogin:
         s = _mock_session_cm(execute_return=_scalar(None))
 
         with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/login", json={
-                    "email": "ghost@x.com", "password": "anything",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/login",
+                    json={
+                        "email": "ghost@x.com",
+                        "password": "anything",
+                    },
+                )
         assert r.status_code == 401
 
     @pytest.mark.asyncio
@@ -328,10 +400,16 @@ class TestLogin:
         s = _mock_session_cm(execute_return=_scalar(user))
 
         with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/login", json={
-                    "email": "ADMIN@X.COM", "password": "mypassword",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/login",
+                    json={
+                        "email": "ADMIN@X.COM",
+                        "password": "mypassword",
+                    },
+                )
         assert r.status_code == 200
 
     @pytest.mark.asyncio
@@ -344,9 +422,13 @@ class TestLogin:
 
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
             with patch("apps.api.admin.auth_routes.async_session", return_value=found):
-                r1 = await c.post("/admin/auth/login", json={"email": "a@x.com", "password": "wrong"})
+                r1 = await c.post(
+                    "/admin/auth/login", json={"email": "a@x.com", "password": "wrong"}
+                )
             with patch("apps.api.admin.auth_routes.async_session", return_value=not_found):
-                r2 = await c.post("/admin/auth/login", json={"email": "ghost@x.com", "password": "wrong"})
+                r2 = await c.post(
+                    "/admin/auth/login", json={"email": "ghost@x.com", "password": "wrong"}
+                )
 
         assert r1.status_code == r2.status_code == 401
         assert r1.json()["detail"] == r2.json()["detail"]
@@ -368,6 +450,7 @@ class TestLogin:
 # REGRESSION TESTS
 # ===========================================================================
 
+
 class TestRegressions:
     @pytest.mark.asyncio
     async def test_register_does_not_reveal_account_info_on_409(self):
@@ -377,10 +460,17 @@ class TestRegressions:
         s1 = _mock_session_cm(execute_return=_scalar(existing))
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "admin@x.com", "password": "pass1234", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "admin@x.com",
+                        "password": "pass1234",
+                        "passcode": "7172",
+                    },
+                )
         assert r.status_code == 409
         body = r.json()["detail"]
         assert "tenant" not in body
@@ -396,10 +486,16 @@ class TestRegressions:
         s = _mock_session_cm(execute_return=_scalar(user))
 
         with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/login", json={
-                    "email": "owner@x.com", "password": "pass1234",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/login",
+                    json={
+                        "email": "owner@x.com",
+                        "password": "pass1234",
+                    },
+                )
 
         token = r.json()["access_token"]
         principal = await current_admin(authorization=f"Bearer {token}")
@@ -417,17 +513,24 @@ class TestRegressions:
         created_tenants: list[Tenant] = []
         s1, s2 = _mock_register_sessions()
 
-        original_add = s1.add
         def capture_add(obj):
             if isinstance(obj, Tenant):
                 created_tenants.append(obj)
+
         s1.add = capture_add
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "sahil@agency.com", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "sahil@agency.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         assert r.status_code == 201
         assert created_tenants, "No Tenant was created"
@@ -438,6 +541,7 @@ class TestRegressions:
 # LOAD TESTS — concurrent requests, no race conditions, no shared state
 # ===========================================================================
 
+
 class TestConcurrentLoad:
     @pytest.mark.asyncio
     async def test_50_concurrent_logins_all_succeed(self):
@@ -447,10 +551,16 @@ class TestConcurrentLoad:
         async def single_login():
             s = _mock_session_cm(execute_return=_scalar(user))
             with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    return await c.post("/admin/auth/login", json={
-                        "email": "admin@x.com", "password": "loadtest123",
-                    })
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app()), base_url="http://test"
+                ) as c:
+                    return await c.post(
+                        "/admin/auth/login",
+                        json={
+                            "email": "admin@x.com",
+                            "password": "loadtest123",
+                        },
+                    )
 
         results = await asyncio.gather(*[single_login() for _ in range(50)])
         statuses = [r.status_code for r in results]
@@ -464,10 +574,16 @@ class TestConcurrentLoad:
         async def single_login():
             s = _mock_session_cm(execute_return=_scalar(user))
             with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    r = await c.post("/admin/auth/login", json={
-                        "email": "admin@x.com", "password": "loadtest123",
-                    })
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app()), base_url="http://test"
+                ) as c:
+                    r = await c.post(
+                        "/admin/auth/login",
+                        json={
+                            "email": "admin@x.com",
+                            "password": "loadtest123",
+                        },
+                    )
                     return r.json()["access_token"]
 
         tokens = await asyncio.gather(*[single_login() for _ in range(50)])
@@ -483,10 +599,16 @@ class TestConcurrentLoad:
         async def bad_login():
             s = _mock_session_cm(execute_return=_scalar(user))
             with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    return await c.post("/admin/auth/login", json={
-                        "email": "admin@x.com", "password": "wrong",
-                    })
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app()), base_url="http://test"
+                ) as c:
+                    return await c.post(
+                        "/admin/auth/login",
+                        json={
+                            "email": "admin@x.com",
+                            "password": "wrong",
+                        },
+                    )
 
         results = await asyncio.gather(*[bad_login() for _ in range(50)])
         assert all(r.status_code == 401 for r in results)
@@ -500,19 +622,32 @@ class TestConcurrentLoad:
         async def do_login():
             s = _mock_session_cm(execute_return=_scalar(user))
             with patch("apps.api.admin.auth_routes.async_session", return_value=s):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    r = await c.post("/admin/auth/login", json={
-                        "email": "login@x.com", "password": "loginpass",
-                    })
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app()), base_url="http://test"
+                ) as c:
+                    r = await c.post(
+                        "/admin/auth/login",
+                        json={
+                            "email": "login@x.com",
+                            "password": "loginpass",
+                        },
+                    )
             return ("login", r.status_code)
 
         async def do_register():
             s1, s2 = _mock_register_sessions()
             with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-                async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                    r = await c.post("/admin/auth/register", json={
-                        "email": "new@x.com", "password": "newpassword", "passcode": "7172",
-                    })
+                async with AsyncClient(
+                    transport=ASGITransport(app=_app()), base_url="http://test"
+                ) as c:
+                    r = await c.post(
+                        "/admin/auth/register",
+                        json={
+                            "email": "new@x.com",
+                            "password": "newpassword",
+                            "passcode": "7172",
+                        },
+                    )
             return ("register", r.status_code)
 
         tasks = [do_login() for _ in range(25)] + [do_register() for _ in range(25)]
@@ -535,17 +670,31 @@ class TestConcurrentLoad:
             if is_first:
                 s1, s2 = _mock_register_sessions()
                 with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-                    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                        r = await c.post("/admin/auth/register", json={
-                            "email": "admin@x.com", "password": "securepass", "passcode": "7172",
-                        })
+                    async with AsyncClient(
+                        transport=ASGITransport(app=_app()), base_url="http://test"
+                    ) as c:
+                        r = await c.post(
+                            "/admin/auth/register",
+                            json={
+                                "email": "admin@x.com",
+                                "password": "securepass",
+                                "passcode": "7172",
+                            },
+                        )
             else:
                 s1 = _mock_session_cm(execute_return=_scalar(existing))
                 with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1]):
-                    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                        r = await c.post("/admin/auth/register", json={
-                            "email": "admin@x.com", "password": "securepass", "passcode": "7172",
-                        })
+                    async with AsyncClient(
+                        transport=ASGITransport(app=_app()), base_url="http://test"
+                    ) as c:
+                        r = await c.post(
+                            "/admin/auth/register",
+                            json={
+                                "email": "admin@x.com",
+                                "password": "securepass",
+                                "passcode": "7172",
+                            },
+                        )
             return r.status_code
 
         tasks = [do_register(i == 0) for i in range(10)]
@@ -558,6 +707,7 @@ class TestConcurrentLoad:
 # ===========================================================================
 # BEHAVIOR TESTS — GET /admin/auth/slack-install-url
 # ===========================================================================
+
 
 class TestSlackInstallUrl:
     @pytest.mark.asyncio
@@ -572,7 +722,9 @@ class TestSlackInstallUrl:
 
         token = _mint_jwt("tenant-xyz", "owner@x.com", "owner")
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-            r = await c.get("/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"})
+            r = await c.get(
+                "/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"}
+            )
 
         assert r.status_code == 200
         url = r.json()["url"]
@@ -587,16 +739,18 @@ class TestSlackInstallUrl:
     @pytest.mark.asyncio
     async def test_sig_expires_within_state_ttl(self):
         import time as time_mod
-        from apps.api.oauth._state import decode_state
 
         token = _mint_jwt("t-ttl", "a@x.com", "owner")
         async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-            r = await c.get("/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"})
+            r = await c.get(
+                "/admin/auth/slack-install-url", headers={"Authorization": f"Bearer {token}"}
+            )
 
-        import time as time_mod
         sig = r.json()["url"].split("sig=")[1]
         settings = get_settings()
-        claims = jwt.decode(sig, settings.admin_jwt_secret, algorithms=["HS256"], issuer=settings.admin_jwt_issuer)
+        claims = jwt.decode(
+            sig, settings.admin_jwt_secret, algorithms=["HS256"], issuer=settings.admin_jwt_issuer
+        )
         remaining = claims["exp"] - int(time_mod.time())
         assert 0 < remaining <= 600  # encode_state uses 600-second TTL
 
@@ -604,6 +758,7 @@ class TestSlackInstallUrl:
 # ===========================================================================
 # BEHAVIOR TESTS — registration creates agency_internal Client
 # ===========================================================================
+
 
 class TestRegisterCreatesClient:
     @pytest.mark.asyncio
@@ -614,10 +769,17 @@ class TestRegisterCreatesClient:
         s1.add = lambda obj: added_objects.append(obj)
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                r = await c.post("/admin/auth/register", json={
-                    "email": "agency@example.com", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "agency@example.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         assert r.status_code == 201
         clients = [obj for obj in added_objects if isinstance(obj, Client)]
@@ -633,10 +795,17 @@ class TestRegisterCreatesClient:
         s1.add = lambda obj: added_objects.append(obj)
 
         with patch("apps.api.admin.auth_routes.async_session", side_effect=[s1, s2]):
-            async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as c:
-                await c.post("/admin/auth/register", json={
-                    "email": "tehreem@agency.com", "password": "securepass", "passcode": "7172",
-                })
+            async with AsyncClient(
+                transport=ASGITransport(app=_app()), base_url="http://test"
+            ) as c:
+                await c.post(
+                    "/admin/auth/register",
+                    json={
+                        "email": "tehreem@agency.com",
+                        "password": "securepass",
+                        "passcode": "7172",
+                    },
+                )
 
         clients = [obj for obj in added_objects if isinstance(obj, Client)]
         assert clients[0].name == "tehreem"

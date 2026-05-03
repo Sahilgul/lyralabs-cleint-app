@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.ghl.client import GHL_BASE

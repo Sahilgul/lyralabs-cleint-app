@@ -7,8 +7,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
-from tenacity import RetryError
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.ghl.client import GHL_API_VERSION, GHL_BASE, GhlClient

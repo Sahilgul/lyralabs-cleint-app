@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.ghl.client import GHL_BASE
@@ -76,10 +75,20 @@ async def test_filters_by_stuck_for_days(make_ctx) -> None:
             200,
             json={
                 "opportunities": [
-                    {"id": "fresh", "name": "F", "pipelineId": "p", "pipelineStageId": "s",
-                     "updatedAt": recent},
-                    {"id": "stale", "name": "S", "pipelineId": "p", "pipelineStageId": "s",
-                     "updatedAt": old},
+                    {
+                        "id": "fresh",
+                        "name": "F",
+                        "pipelineId": "p",
+                        "pipelineStageId": "s",
+                        "updatedAt": recent,
+                    },
+                    {
+                        "id": "stale",
+                        "name": "S",
+                        "pipelineId": "p",
+                        "pipelineStageId": "s",
+                        "updatedAt": old,
+                    },
                 ]
             },
         )
@@ -100,14 +109,17 @@ async def test_handles_unparseable_updated_at(make_ctx) -> None:
             200,
             json={
                 "opportunities": [
-                    {"id": "o-x", "name": "x", "pipelineId": "p", "pipelineStageId": "s",
-                     "updatedAt": "not-a-date"}
+                    {
+                        "id": "o-x",
+                        "name": "x",
+                        "pipelineId": "p",
+                        "pipelineStageId": "s",
+                        "updatedAt": "not-a-date",
+                    }
                 ]
             },
         )
-        out = await GhlPipelineOpportunities().run(
-            ctx, GhlPipelineOpportunitiesInput()
-        )
+        out = await GhlPipelineOpportunities().run(ctx, GhlPipelineOpportunitiesInput())
 
     assert out.count == 1
     assert out.opportunities[0].days_in_stage is None
@@ -133,13 +145,11 @@ async def test_passes_pipeline_and_stage_filters(make_ctx) -> None:
 async def test_raises_when_no_location_id(make_ctx) -> None:
     ctx = make_ctx(creds=_ghl_creds(loc_id=None))
     with pytest.raises(ToolError, match="missing GHL location id"):
-        await GhlPipelineOpportunities().run(
-            ctx, GhlPipelineOpportunitiesInput()
-        )
+        await GhlPipelineOpportunities().run(ctx, GhlPipelineOpportunitiesInput())
 
 
 @pytest.mark.asyncio
-async def test_uses_dateAdded_when_updatedAt_missing(make_ctx) -> None:
+async def test_uses_dateAdded_when_updatedAt_missing(make_ctx) -> None:  # noqa: N802 test name describes API field name
     ctx = make_ctx(creds=_ghl_creds())
     added = (datetime.now(UTC) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
     with respx.mock(base_url=GHL_BASE) as mock:
@@ -147,8 +157,13 @@ async def test_uses_dateAdded_when_updatedAt_missing(make_ctx) -> None:
             200,
             json={
                 "opportunities": [
-                    {"id": "x", "name": "x", "pipelineId": "p", "pipelineStageId": "s",
-                     "dateAdded": added}
+                    {
+                        "id": "x",
+                        "name": "x",
+                        "pipelineId": "p",
+                        "pipelineStageId": "s",
+                        "dateAdded": added,
+                    }
                 ]
             },
         )

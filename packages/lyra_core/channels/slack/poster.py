@@ -92,9 +92,7 @@ async def post_reply(tenant_id: str, reply: OutboundReply) -> str:
     parent_ts = resp.get("ts", "")
 
     for art in reply.artifacts:
-        async with phase(
-            "slack.files_upload_v2", filename=art.filename, n_bytes=len(art.content)
-        ):
+        async with phase("slack.files_upload_v2", filename=art.filename, n_bytes=len(art.content)):
             await client.files_upload_v2(
                 channel=reply.channel_id,
                 thread_ts=reply.thread_ts,

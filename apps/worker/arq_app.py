@@ -10,11 +10,11 @@ Run the worker:
 from __future__ import annotations
 
 import traceback
+from typing import ClassVar
 
 import httpx
 from arq import cron
 from arq.connections import RedisSettings
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.logging import configure_logging, get_logger
 
@@ -54,30 +54,35 @@ async def on_job_abort(ctx: dict) -> None:
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-1500:]
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(webhook, json={
-                "text": f"❌ *Worker job failed*",
-                "attachments": [{
-                    "color": "danger",
-                    "fields": [
-                        {"title": "Job ID", "value": job_id, "short": True},
-                        {"title": "Function", "value": func_name, "short": True},
-                        {"title": "Error", "value": f"`{type(exc).__name__}: {exc}`"},
-                        {"title": "Traceback", "value": f"```{tb}```"},
-                    ]
-                }]
-            })
+            await client.post(
+                webhook,
+                json={
+                    "text": "❌ *Worker job failed*",
+                    "attachments": [
+                        {
+                            "color": "danger",
+                            "fields": [
+                                {"title": "Job ID", "value": job_id, "short": True},
+                                {"title": "Function", "value": func_name, "short": True},
+                                {"title": "Error", "value": f"`{type(exc).__name__}: {exc}`"},
+                                {"title": "Traceback", "value": f"```{tb}```"},
+                            ],
+                        }
+                    ],
+                },
+            )
     except Exception:
         log.warning("arq.worker.slack_error_notify_failed")
 
 
 class WorkerSettings:
-    functions = [run_agent, resume_agent, crystallize_skills]
-    cron_jobs = [cron(crystallize_skills, hour=3, minute=0)]
+    functions: ClassVar[list] = [run_agent, resume_agent, crystallize_skills]
+    cron_jobs: ClassVar[list] = [cron(crystallize_skills, hour=3, minute=0)]
     max_jobs = 4
     # 5 min per job — safe because LangGraph interrupt() causes ainvoke()
     # to return immediately (it does NOT block waiting for approval).
     job_timeout = 300
-    # 20 slots for thread-lock contention retries (5s × 20 = 100s of patience)
+    # 20 slots for thread-lock contention retries (5s x 20 = 100s of patience)
     # + 5 slots for real transient failures. Total: 25.
     max_tries = 25
     on_startup = startup

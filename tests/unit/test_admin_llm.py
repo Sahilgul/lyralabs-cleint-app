@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-
-from apps.api.admin.auth import AdminPrincipal, current_super_admin
-from apps.api.admin.llm import router as llm_router
 from lyra_core.common.crypto import encrypt_platform
 from lyra_core.db.models import LlmModelAssignment, LlmProvider
 from lyra_core.db.session import get_session
 from lyra_core.llm import router as router_mod
+
+from apps.api.admin.auth import AdminPrincipal, current_super_admin
+from apps.api.admin.llm import router as llm_router
 
 
 @pytest.fixture(autouse=True)
@@ -161,7 +161,6 @@ async def test_upsert_provider_encrypts_key_and_invalidates_cache() -> None:
     ]
 
     # Patch list_configured_providers (it would otherwise hit a real DB).
-    import apps.api.admin.llm as llm_admin
 
     async def fake_list():
         return [
@@ -192,7 +191,6 @@ async def test_upsert_provider_encrypts_key_and_invalidates_cache() -> None:
 
     app = _build(s)
     # Patch in the admin module (where it's bound) -- this is the live import path.
-    app.dependency_overrides  # smoke
     import apps.api.admin.llm as admin_mod
 
     monkey_set = []
@@ -205,9 +203,7 @@ async def test_upsert_provider_encrypts_key_and_invalidates_cache() -> None:
     _patch_attr(admin_mod, "invalidate_router_cache", _spy_invalidate)
 
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://t"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
             r = await ac.put(
                 "/admin/llm/providers/deepseek",
                 json={"api_key": "ds-secret", "enabled": True, "extra_config": {}},
@@ -291,7 +287,9 @@ async def test_set_assignment_writes_row_and_invalidates() -> None:
 
     invalidations = {"n": 0}
     orig = admin_mod.invalidate_router_cache
-    admin_mod.invalidate_router_cache = lambda: invalidations.__setitem__("n", invalidations["n"] + 1)
+    admin_mod.invalidate_router_cache = lambda: invalidations.__setitem__(
+        "n", invalidations["n"] + 1
+    )
 
     try:
         app = _build(s)

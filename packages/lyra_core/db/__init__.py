@@ -10,14 +10,14 @@ from .models import (
 from .session import async_session, engine, get_session
 
 __all__ = [
+    "AuditEvent",
     "Base",
+    "IntegrationConnection",
+    "Job",
+    "SlackInstallation",
     "Tenant",
     "User",
-    "IntegrationConnection",
-    "SlackInstallation",
-    "Job",
-    "AuditEvent",
-    "engine",
     "async_session",
+    "engine",
     "get_session",
 ]

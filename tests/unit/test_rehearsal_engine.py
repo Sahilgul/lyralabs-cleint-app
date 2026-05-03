@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic import BaseModel
-
 from lyra_core.agent.nodes.approval import _run_rehearsal
 from lyra_core.agent.state import Plan, PlanStep
 from lyra_core.tools.base import RiskProfile, Tool, ToolContext, TrustTier
 from lyra_core.tools.registry import default_registry
+from pydantic import BaseModel
 
 
 class _In(BaseModel):
@@ -86,7 +85,9 @@ async def test_slow_tool_falls_back_gracefully() -> None:
 async def test_fast_tool_returns_preview() -> None:
     plan = Plan(
         goal="g",
-        steps=[PlanStep(id="s2", tool_name="_test_fast_tool", rationale="r", args={"msg": "hello"})],
+        steps=[
+            PlanStep(id="s2", tool_name="_test_fast_tool", rationale="r", args={"msg": "hello"})
+        ],
     )
     profiles = [
         RiskProfile(tier=TrustTier.MEDIUM, reversibility="reversible", blast_radius="single")
@@ -108,9 +109,7 @@ async def test_low_steps_skipped_in_rehearsal() -> None:
         goal="g",
         steps=[PlanStep(id="s3", tool_name="_test_fast_tool", rationale="r")],
     )
-    profiles = [
-        RiskProfile(tier=TrustTier.LOW, reversibility="reversible", blast_radius="single")
-    ]
+    profiles = [RiskProfile(tier=TrustTier.LOW, reversibility="reversible", blast_radius="single")]
     previews = await _run_rehearsal(
         plan=plan,
         profiles=profiles,

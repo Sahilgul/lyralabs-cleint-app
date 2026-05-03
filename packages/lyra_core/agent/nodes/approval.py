@@ -60,7 +60,9 @@ async def _run_rehearsal(
             text = f"Will call `{step.tool_name}`."
         return step.id, text
 
-    results = await asyncio.gather(*[_sim_one(s, p) for s, p in zip(plan.steps, profiles)])
+    results = await asyncio.gather(
+        *[_sim_one(s, p) for s, p in zip(plan.steps, profiles, strict=True)]
+    )
     return {sid: txt for sid, txt in results if txt}
 
 
@@ -95,7 +97,7 @@ def _plan_preview_blocks(
         else "I'm about to do this. Approve?"
     )
     instruction = (
-        "\n\n*Reply \"I confirm\" in Slack to proceed, or \"reject\" to cancel.*"
+        '\n\n*Reply "I confirm" in Slack to proceed, or "reject" to cancel.*'
         if overall_tier == TrustTier.HIGH
         else ""
     )
@@ -240,11 +242,20 @@ def route_after_approval(state: AgentState) -> Literal["executor", "rejected_rep
 
 
 async def rejected_reply_node(state: AgentState) -> dict[str, Any]:
+    text = "Got it - rejected. I won't do anything. Tell me what to change."
     reply = OutboundReply(
-        text="Got it - rejected. I won't do anything. Tell me what to change.",
+        text=text,
         channel_id=state["channel_id"],
         thread_ts=state.get("reply_thread_ts"),
         assistant_status_thread_ts=state.get("assistant_status_thread_ts"),
     )
     await post_reply(state["tenant_id"], reply)
-    return {"final_summary": "rejected_by_user"}
+    # Record the rejection in message history so a follow-up turn knows the
+    # plan was rejected (not still pending) and the model can reason about
+    # what to change instead of reposting the same approval card.
+    history = list(state.get("messages") or [])
+    new_messages = [
+        *history,
+        {"role": "assistant", "content": f"[plan rejected by user]\n\n{text}"},
+    ]
+    return {"final_summary": "rejected_by_user", "messages": new_messages}

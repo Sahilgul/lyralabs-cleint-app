@@ -175,11 +175,11 @@ class PdfFromMarkdown(Tool[PdfFromMarkdownInput, PdfFromMarkdownOutput]):
         html = _HTML_TEMPLATE.format(title=args.title, body_html=html_body, footer=args.footer)
 
         def _render() -> bytes:
-            return HTML(string=html).write_pdf()  # type: ignore[no-any-return]
+            return HTML(string=html).write_pdf()
 
         try:
             pdf = await asyncio.to_thread(_render)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ToolError(f"PDF render failed: {exc}") from exc
 
         # Side-effect: append to ctx.extra so the executor can lift it onto state.artifacts

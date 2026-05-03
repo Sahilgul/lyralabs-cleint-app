@@ -17,9 +17,11 @@ def _ctx() -> ToolContext:
     return ToolContext(tenant_id="tenant-1", job_id="j-1", user_id="U1")
 
 
-def _patch_token(monkeypatch, *, bot: str | None = "xoxb-test", user: str | None = "xoxp-test") -> None:
+def _patch_token(
+    monkeypatch, *, bot: str | None = "xoxb-test", user: str | None = "xoxp-test"
+) -> None:
     """Stub _bot_token_for / _user_token_for so we don't touch Postgres."""
-    from lyra_core.tools.slack import _client, conversations, users, search, canvas
+    from lyra_core.tools.slack import _client, canvas, conversations, search, users
 
     async def fake_bot(_):
         if bot is None:
@@ -50,9 +52,7 @@ def test_all_six_slack_tools_registered() -> None:
 
 def test_canvas_is_only_write_tool_in_slack_namespace() -> None:
     write_slack = [
-        t
-        for t in default_registry.all()
-        if t.provider == "slack" and t.requires_approval
+        t for t in default_registry.all() if t.provider == "slack" and t.requires_approval
     ]
     assert [t.name for t in write_slack] == ["slack.canvas.create"]
 
@@ -72,9 +72,7 @@ async def test_conversations_history_returns_normalized_messages(monkeypatch) ->
     fake_client = MagicMock()
     fake_client.conversations_history = AsyncMock(return_value=fake_resp)
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.history")
         out = await tool.run(_ctx(), tool.Input(channel_id="C1", limit=20))
 

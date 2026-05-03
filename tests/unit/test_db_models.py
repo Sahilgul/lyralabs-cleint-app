@@ -59,7 +59,6 @@ class TestTenantSchema:
         assert col.unique
 
     def test_default_plan_is_trial(self) -> None:
-        t = Tenant(external_team_id="T1", channel="slack", name="Acme")
         # default lives on the Column; instantiation alone won't populate it
         # without flushing. Test the column default explicitly.
         assert Tenant.__table__.c.plan.default.arg == "trial"
@@ -69,9 +68,7 @@ class TestTenantSchema:
 
 class TestUserSchema:
     def test_unique_constraint_on_tenant_user_channel(self) -> None:
-        constraints = {
-            c.name for c in User.__table__.constraints if hasattr(c, "name") and c.name
-        }
+        constraints = {c.name for c in User.__table__.constraints if hasattr(c, "name") and c.name}
         assert "uq_user_per_tenant" in constraints
 
     def test_default_role_member(self) -> None:

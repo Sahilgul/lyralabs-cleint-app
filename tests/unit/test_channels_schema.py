@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from lyra_core.channels.schema import Artifact, InboundMessage, OutboundReply, Surface
+from pydantic import ValidationError
 
 
 class TestSurfaceEnum:

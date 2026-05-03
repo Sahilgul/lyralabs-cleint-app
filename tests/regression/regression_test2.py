@@ -18,17 +18,13 @@ string, not execute the write.
 from __future__ import annotations
 
 import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 from lyra_core.agent.nodes.agent import (
     SUBMIT_PLAN_TOOL_NAME,
     _drop_orphaned_tool_call_messages,
-    agent_node,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -79,8 +75,13 @@ def test_drop_orphaned_removes_unmatched_assistant_tool_call():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call_X", "type": "function",
-                            "function": {"name": SUBMIT_PLAN_TOOL_NAME, "arguments": "{}"}}],
+            "tool_calls": [
+                {
+                    "id": "call_X",
+                    "type": "function",
+                    "function": {"name": SUBMIT_PLAN_TOOL_NAME, "arguments": "{}"},
+                }
+            ],
         },
         # No tool response for call_X — this is the poisoned state
         {"role": "user", "content": "reject"},
@@ -108,8 +109,13 @@ def test_drop_orphaned_preserves_matched_assistant_tool_call():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call_Y", "type": "function",
-                            "function": {"name": "contacts_search", "arguments": "{}"}}],
+            "tool_calls": [
+                {
+                    "id": "call_Y",
+                    "type": "function",
+                    "function": {"name": "contacts_search", "arguments": "{}"},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call_Y", "content": '{"contacts": []}'},
         {"role": "assistant", "content": "No contacts found."},
@@ -130,24 +136,33 @@ def test_drop_orphaned_mixed_keeps_matched_drops_unmatched():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call_good", "type": "function",
-                            "function": {"name": "contacts_search", "arguments": "{}"}}],
+            "tool_calls": [
+                {
+                    "id": "call_good",
+                    "type": "function",
+                    "function": {"name": "contacts_search", "arguments": "{}"},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call_good", "content": "[]"},
         # Bad orphan
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call_bad", "type": "function",
-                            "function": {"name": SUBMIT_PLAN_TOOL_NAME, "arguments": "{}"}}],
+            "tool_calls": [
+                {
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": {"name": SUBMIT_PLAN_TOOL_NAME, "arguments": "{}"},
+                }
+            ],
         },
         {"role": "user", "content": "reject"},
     ]
 
     healed = _drop_orphaned_tool_call_messages(messages)
 
-    ids = [m.get("tool_calls", [{}])[0].get("id") if m.get("tool_calls") else None
-           for m in healed]
+    ids = [m.get("tool_calls", [{}])[0].get("id") if m.get("tool_calls") else None for m in healed]
     assert "call_good" in ids, "Matched tool_call should be preserved"
     assert "call_bad" not in ids, "Orphaned tool_call should be dropped"
 
@@ -191,9 +206,7 @@ async def test_direct_write_tool_blocked_by_tool_node(monkeypatch):
     # Patch the registry to return our fake write tool.
     mock_registry = MagicMock()
     mock_registry.get.return_value = fake_tool
-    monkeypatch.setattr(
-        "lyra_core.agent.nodes.tool_node.default_registry", mock_registry
-    )
+    monkeypatch.setattr("lyra_core.agent.nodes.tool_node.default_registry", mock_registry)
 
     ctx = MagicMock(spec=ToolContext)
 
@@ -240,9 +253,7 @@ async def test_direct_write_returns_tool_error_not_exception(monkeypatch):
     fake_tool.requires_approval = True
     mock_registry = MagicMock()
     mock_registry.get.return_value = fake_tool
-    monkeypatch.setattr(
-        "lyra_core.agent.nodes.tool_node.default_registry", mock_registry
-    )
+    monkeypatch.setattr("lyra_core.agent.nodes.tool_node.default_registry", mock_registry)
 
     ctx = MagicMock(spec=ToolContext)
     tool_call = {

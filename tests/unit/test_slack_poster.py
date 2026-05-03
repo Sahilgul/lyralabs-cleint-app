@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from lyra_core.channels.schema import Artifact, OutboundReply
 from lyra_core.channels.slack import poster as poster_mod
 
@@ -66,7 +65,7 @@ async def test_post_reply_sends_message_and_uploads_artifacts(monkeypatch) -> No
         def __init__(self, token: str) -> None:
             assert token == "xoxb-test"
 
-        chat_postMessage = fake_client.chat_postMessage
+        chat_postMessage = fake_client.chat_postMessage  # noqa: N815 Slack SDK API contract
         files_upload_v2 = fake_client.files_upload_v2
 
     monkeypatch.setattr(poster_mod, "AsyncWebClient", FakeWebClient)
@@ -105,8 +104,8 @@ async def test_post_reply_clears_assistant_status(monkeypatch) -> None:
         def __init__(self, *_a, **_kw) -> None:
             pass
 
-        chat_postMessage = fake_post
-        assistant_threads_setStatus = fake_clear
+        chat_postMessage = fake_post  # noqa: N815 Slack SDK API contract
+        assistant_threads_setStatus = fake_clear  # noqa: N815 Slack SDK API contract
 
         async def files_upload_v2(self, **kw):
             return {"ok": True}
@@ -140,7 +139,7 @@ async def test_post_reply_sends_blocks_when_provided(monkeypatch) -> None:
         def __init__(self, *_a, **_kw) -> None:
             pass
 
-        chat_postMessage = fake_post
+        chat_postMessage = fake_post  # noqa: N815 Slack SDK API contract
 
         async def files_upload_v2(self, **kw):
             return {"ok": True}
@@ -168,7 +167,7 @@ async def test_post_reply_falls_back_to_space_when_text_none(monkeypatch) -> Non
         def __init__(self, *_a, **_kw) -> None:
             pass
 
-        chat_postMessage = fake_post
+        chat_postMessage = fake_post  # noqa: N815 Slack SDK API contract
 
         async def files_upload_v2(self, **kw):
             return {"ok": True}
@@ -197,7 +196,7 @@ async def test_post_reply_top_level_when_thread_ts_none(monkeypatch) -> None:
         def __init__(self, *_a, **_kw) -> None:
             pass
 
-        chat_postMessage = fake_post
+        chat_postMessage = fake_post  # noqa: N815 Slack SDK API contract
 
         async def files_upload_v2(self, **kw):
             return {"ok": True}

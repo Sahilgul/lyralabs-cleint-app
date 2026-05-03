@@ -9,10 +9,8 @@ from __future__ import annotations
 import base64
 import sys
 import types
-from unittest.mock import MagicMock
 
 import pytest
-
 from lyra_core.tools.artifacts.chart import (
     ChartBar,
     ChartBarInput,
@@ -46,11 +44,11 @@ class _FakeFigure:
 def _install_fake_plotly(monkeypatch) -> dict:
     captured = {"scatter_calls": [], "bar_calls": []}
 
-    def Scatter(**kw):
+    def Scatter(**kw):  # noqa: N802 mocks Plotly's PascalCase class
         captured["scatter_calls"].append(kw)
         return ("scatter", kw)
 
-    def Bar(**kw):
+    def Bar(**kw):  # noqa: N802 mocks Plotly's PascalCase class
         captured["bar_calls"].append(kw)
         return ("bar", kw)
 
@@ -142,9 +140,7 @@ async def test_chart_render_failure_raises_tool_error(monkeypatch) -> None:
 
     ctx = ToolContext(tenant_id="t-1")
     with pytest.raises(ToolError, match="chart render failed"):
-        await ChartLine().run(
-            ctx, ChartLineInput(title="t", x=["a"], series={"s": [1.0]})
-        )
+        await ChartLine().run(ctx, ChartLineInput(title="t", x=["a"], series={"s": [1.0]}))
 
 
 @pytest.mark.asyncio

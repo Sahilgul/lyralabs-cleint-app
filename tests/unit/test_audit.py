@@ -6,7 +6,6 @@ import hashlib
 import json
 
 import pytest
-
 from lyra_core.common.audit import _hash_args, record_event
 
 
@@ -32,9 +31,12 @@ def test_hash_args_handles_non_serializable_via_default_str() -> None:
     from datetime import datetime
 
     h = _hash_args({"when": datetime(2026, 5, 1)})
-    assert h == hashlib.sha256(
-        json.dumps({"when": str(datetime(2026, 5, 1))}, sort_keys=True).encode()
-    ).hexdigest()
+    assert (
+        h
+        == hashlib.sha256(
+            json.dumps({"when": str(datetime(2026, 5, 1))}, sort_keys=True).encode()
+        ).hexdigest()
+    )
 
 
 @pytest.mark.asyncio

@@ -15,13 +15,12 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from sqlalchemy.dialects.postgresql import insert
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.crypto import encrypt_for_tenant
 from lyra_core.common.logging import get_logger
 from lyra_core.db.models import IntegrationConnection
 from lyra_core.db.session import async_session
+from sqlalchemy.dialects.postgresql import insert
 
 from ._state import decode_state, encode_state
 
@@ -29,7 +28,7 @@ router = APIRouter()
 log = get_logger(__name__)
 
 GHL_AUTH = "https://marketplace.gohighlevel.com/oauth/chooselocation"
-GHL_TOKEN = "https://services.leadconnectorhq.com/oauth/token"
+GHL_TOKEN = "https://services.leadconnectorhq.com/oauth/token"  # noqa: S105 public OAuth token endpoint URL, not a secret
 
 
 @router.get("/install")
@@ -51,7 +50,7 @@ async def install(tenant_id: str = Query(...)) -> RedirectResponse:
 async def callback(
     code: str = Query(...),
     state: str = Query(...),
-    location_id: str | None = Query(None, alias="locationId"),  # noqa: ARG001
+    location_id: str | None = Query(None, alias="locationId"),
 ):
     settings = get_settings()
     try:

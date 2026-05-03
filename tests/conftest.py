@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -20,9 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 # --- env shim (must run before pydantic-settings binds) -----------------------
 
 os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault(
-    "MASTER_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"a" * 32).decode("ascii")
-)
+os.environ.setdefault("MASTER_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"a" * 32).decode("ascii"))
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
 )
@@ -39,15 +37,13 @@ sys.path.insert(0, os.path.join(ROOT, "packages"))
 sys.path.insert(0, ROOT)
 
 # --- now safe to import test deps and source -----------------------------------
-import pytest  # noqa: E402
-
 # Eagerly import tool packages so default_registry has all of them. Tools
 # self-register at import time. Without this, tests that rely on the registry
 # would only see whatever was imported transitively.
-import lyra_core.tools.artifacts  # noqa: E402, F401
-import lyra_core.tools.ghl  # noqa: E402, F401
+import lyra_core.tools.artifacts  # noqa: E402
+import lyra_core.tools.ghl  # noqa: E402
 import lyra_core.tools.google  # noqa: E402, F401
-
+import pytest  # noqa: E402
 
 # --- shared fixtures -----------------------------------------------------------
 

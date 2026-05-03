@@ -14,10 +14,10 @@ from .search import SearchMessages
 from .users import UsersInfo, UsersList
 
 __all__ = [
+    "CanvasCreate",
     "ConversationsHistory",
     "ConversationsReplies",
+    "SearchMessages",
     "UsersInfo",
     "UsersList",
-    "SearchMessages",
-    "CanvasCreate",
 ]

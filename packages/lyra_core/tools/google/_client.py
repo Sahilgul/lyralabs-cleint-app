@@ -15,7 +15,7 @@ def google_creds(creds: ProviderCredentials) -> Credentials:
     return Credentials(
         token=creds.access_token,
         refresh_token=creds.refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
+        token_uri="https://oauth2.googleapis.com/token",  # noqa: S106 public OAuth token endpoint URL, not a secret
         scopes=creds.scopes.split(" ") if creds.scopes else None,
     )
 

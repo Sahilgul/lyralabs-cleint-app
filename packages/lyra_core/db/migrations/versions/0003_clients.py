@@ -164,9 +164,7 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_audit_client_id", "audit_events", ["client_id"])
-    op.create_index(
-        "ix_audit_tenant_client_ts", "audit_events", ["tenant_id", "client_id", "ts"]
-    )
+    op.create_index("ix_audit_tenant_client_ts", "audit_events", ["tenant_id", "client_id", "ts"])
 
     # ------------------------------------------------------------------
     # 6. Data backfill

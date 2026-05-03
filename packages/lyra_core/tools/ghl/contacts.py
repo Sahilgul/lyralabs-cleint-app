@@ -39,9 +39,7 @@ class GhlContactsSearch(Tool[GhlContactsSearchInput, GhlContactsSearchOutput]):
     Input = GhlContactsSearchInput
     Output = GhlContactsSearchOutput
 
-    async def run(
-        self, ctx: ToolContext, args: GhlContactsSearchInput
-    ) -> GhlContactsSearchOutput:
+    async def run(self, ctx: ToolContext, args: GhlContactsSearchInput) -> GhlContactsSearchOutput:
         creds = await ctx.creds_lookup("ghl")
         client = GhlClient(creds)
 
@@ -87,15 +85,15 @@ class GhlContactsCreateOutput(BaseModel):
 
 class GhlContactsCreate(Tool[GhlContactsCreateInput, GhlContactsCreateOutput]):
     name = "ghl.contacts.create"
-    description = "Create a new contact in GoHighLevel. Required: first_name. At least one of email/phone."
+    description = (
+        "Create a new contact in GoHighLevel. Required: first_name. At least one of email/phone."
+    )
     provider = "ghl"
     requires_approval = True
     Input = GhlContactsCreateInput
     Output = GhlContactsCreateOutput
 
-    async def run(
-        self, ctx: ToolContext, args: GhlContactsCreateInput
-    ) -> GhlContactsCreateOutput:
+    async def run(self, ctx: ToolContext, args: GhlContactsCreateInput) -> GhlContactsCreateOutput:
         if not args.email and not args.phone:
             from ..base import ToolError
 
@@ -104,7 +102,9 @@ class GhlContactsCreate(Tool[GhlContactsCreateInput, GhlContactsCreateOutput]):
         creds = await ctx.creds_lookup("ghl")
         client = GhlClient(creds)
         if ctx.dry_run:
-            return GhlContactsCreateOutput(id="dry-run", email=str(args.email) if args.email else None)
+            return GhlContactsCreateOutput(
+                id="dry-run", email=str(args.email) if args.email else None
+            )
 
         body = {
             "locationId": client.location_id,

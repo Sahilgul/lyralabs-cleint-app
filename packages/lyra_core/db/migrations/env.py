@@ -5,10 +5,9 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
-
 from lyra_core.common.config import get_settings
 from lyra_core.db.models import Base
+from sqlalchemy import create_engine, pool
 
 config = context.config
 

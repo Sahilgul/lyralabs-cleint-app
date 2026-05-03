@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-
 from lyra_core.common.crypto import encrypt_platform
 from lyra_core.db.models import LlmModelAssignment, LlmProvider
 from lyra_core.llm import router as router_mod

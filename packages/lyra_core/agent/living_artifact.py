@@ -19,9 +19,7 @@ from ..db.models import WorkspaceArtifact
 from ..db.session import async_session
 
 
-async def load_artifact(
-    tenant_id: str, client_id: str | None, thread_id: str
-) -> dict[str, Any]:
+async def load_artifact(tenant_id: str, client_id: str | None, thread_id: str) -> dict[str, Any]:
     """Load the artifact body. Returns {} when not yet created."""
     async with async_session() as s:
         row = (

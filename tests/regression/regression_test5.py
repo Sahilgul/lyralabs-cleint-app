@@ -36,7 +36,6 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
-
 from lyra_core.agent import build_agent_graph
 from lyra_core.agent.nodes import approval as approval_mod
 from lyra_core.agent.nodes.approval import (
@@ -143,12 +142,10 @@ async def test_approval_card_posted_exactly_once_across_run_and_resume(
     # First invocation: should suspend at approval_wait's interrupt().
     result = await graph.ainvoke(initial_state, config=config)
     assert result.get("__interrupt__"), (
-        "graph must suspend at approval_wait's interrupt() — got "
-        f"keys: {list(result.keys())}"
+        f"graph must suspend at approval_wait's interrupt() — got keys: {list(result.keys())}"
     )
     assert len(posted_cards) == 1, (
-        f"approval card must post exactly once on first run, got "
-        f"{len(posted_cards)}"
+        f"approval card must post exactly once on first run, got {len(posted_cards)}"
     )
 
     # Resume with approval. Without the split-node fix, approval_post
@@ -225,6 +222,6 @@ def test_graph_contains_both_split_nodes():
 
 def test_approval_post_and_approval_wait_are_distinct_nodes():
     """The two nodes must not be aliased to the same callable."""
-    assert (
-        approval_mod.approval_post_node is not approval_mod.approval_wait_node
-    ), "approval_post_node and approval_wait_node must be distinct functions"
+    assert approval_mod.approval_post_node is not approval_mod.approval_wait_node, (
+        "approval_post_node and approval_wait_node must be distinct functions"
+    )

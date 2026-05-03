@@ -166,9 +166,7 @@ async def test_tool_node_invalid_args_returns_error(monkeypatch) -> None:
     _patch_audit(monkeypatch)
 
     state = _state(
-        tool_calls=[
-            {"id": "tc-1", "function": {"name": "fake.read", "arguments": "{}"}}
-        ]
+        tool_calls=[{"id": "tc-1", "function": {"name": "fake.read", "arguments": "{}"}}]
     )
     out = await tool_node(state)
 
@@ -185,9 +183,7 @@ async def test_tool_node_tool_error_propagated(monkeypatch) -> None:
     _patch_audit(monkeypatch)
 
     state = _state(
-        tool_calls=[
-            {"id": "tc-1", "function": {"name": "fake.read", "arguments": "{}"}}
-        ]
+        tool_calls=[{"id": "tc-1", "function": {"name": "fake.read", "arguments": "{}"}}]
     )
     out = await tool_node(state)
 

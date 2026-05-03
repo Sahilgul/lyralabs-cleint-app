@@ -104,15 +104,15 @@ async def executor_node(state: AgentState) -> dict[str, Any]:
         try:
             tr = await tool.safe_run(ctx, args_obj)
         except Exception as exc:
-            tr = None
             log.exception("executor.tool_crash", step=step.id, tool=step.tool_name)
-            res = StepResult(
-                step_id=step.id,
-                tool_name=step.tool_name,
-                ok=False,
-                error=f"tool crash: {exc}",
+            results.append(
+                StepResult(
+                    step_id=step.id,
+                    tool_name=step.tool_name,
+                    ok=False,
+                    error=f"tool crash: {exc}",
+                ).model_dump()
             )
-            results.append(res.model_dump())
             continue
 
         if tr.ok and tr.data is not None:

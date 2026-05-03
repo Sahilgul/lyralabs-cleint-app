@@ -33,18 +33,16 @@ def build_teams_app() -> Any:
         from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
         from botbuilder.schema import Activity
     except ImportError as exc:
-        raise RuntimeError(
-            "botbuilder-python not installed; run: pip install '.[teams]'"
-        ) from exc
+        raise RuntimeError("botbuilder-python not installed; run: pip install '.[teams]'") from exc
 
     adapter_settings = BotFrameworkAdapterSettings(
         app_id=settings.teams_app_id, app_password=settings.teams_app_password
     )
     adapter = BotFrameworkAdapter(adapter_settings)
 
-    async def on_turn(turn_context):  # noqa: ANN001
+    async def on_turn(turn_context):
         """Handle an inbound Teams activity."""
-        from lyra_core.worker.queue import enqueue_run_agent  # noqa: PLC0415
+        from lyra_core.worker.queue import enqueue_run_agent
 
         activity: Activity = turn_context.activity
         if activity.type != "message" or not activity.text:

@@ -20,9 +20,34 @@ log = get_logger(__name__)
 
 _STOP_WORDS = frozenset(
     {
-        "a", "an", "the", "to", "and", "or", "for", "of", "in", "with",
-        "i", "want", "need", "please", "help", "can", "you", "how", "do",
-        "get", "use", "using", "by", "from", "is", "it", "that", "this",
+        "a",
+        "an",
+        "the",
+        "to",
+        "and",
+        "or",
+        "for",
+        "of",
+        "in",
+        "with",
+        "i",
+        "want",
+        "need",
+        "please",
+        "help",
+        "can",
+        "you",
+        "how",
+        "do",
+        "get",
+        "use",
+        "using",
+        "by",
+        "from",
+        "is",
+        "it",
+        "that",
+        "this",
     }
 )
 

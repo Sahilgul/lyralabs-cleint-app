@@ -99,9 +99,7 @@ async def _load_cache() -> None:
 
     async with async_session() as s:
         provider_rows = (await s.execute(select(LlmProvider))).scalars().all()
-        assignment_rows = (
-            (await s.execute(select(LlmModelAssignment))).scalars().all()
-        )
+        assignment_rows = (await s.execute(select(LlmModelAssignment))).scalars().all()
 
     providers_by_key = {p.provider_key: p for p in provider_rows}
 
@@ -116,9 +114,7 @@ async def _load_cache() -> None:
                 provider=a.provider_key,
             )
             continue
-        api_key = (
-            decrypt_platform(prov.api_key_encrypted) if prov.api_key_encrypted else None
-        )
+        api_key = decrypt_platform(prov.api_key_encrypted) if prov.api_key_encrypted else None
         spec = PROVIDERS.get(a.provider_key)
         api_base = prov.api_base or (spec.default_api_base if spec else None)
         new_cache[a.tier] = ResolvedModel(
@@ -196,7 +192,7 @@ async def resolve(tier: Tier) -> ResolvedModel:
             if not _cache_fresh():
                 try:
                     await _load_cache()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning(
                         "llm.router.cache_load_failed",
                         error=str(exc),
@@ -249,7 +245,9 @@ async def list_configured_providers() -> list[dict[str, Any]]:
                 "has_api_key": bool(row and row.api_key_encrypted),
                 "api_base": row.api_base if row else None,
                 "extra_config": dict(row.extra_config or {}) if row else {},
-                "last_tested_at": row.last_tested_at.isoformat() if row and row.last_tested_at else None,
+                "last_tested_at": row.last_tested_at.isoformat()
+                if row and row.last_tested_at
+                else None,
                 "last_test_status": row.last_test_status if row else None,
                 "last_test_error": row.last_test_error if row else None,
                 "updated_by_email": row.updated_by_email if row else None,
@@ -273,9 +271,7 @@ async def test_provider_connection(
 
     async with async_session() as s:
         prov = (
-            await s.execute(
-                select(LlmProvider).where(LlmProvider.provider_key == provider_key)
-            )
+            await s.execute(select(LlmProvider).where(LlmProvider.provider_key == provider_key))
         ).scalar_one_or_none()
         if prov is None:
             return False, f"provider {provider_key!r} is not configured"
@@ -300,15 +296,13 @@ async def test_provider_connection(
             ),
             timeout=timeout_s,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         ok = False
         err = str(exc)[:500]
 
     async with async_session() as s:
         prov = (
-            await s.execute(
-                select(LlmProvider).where(LlmProvider.provider_key == provider_key)
-            )
+            await s.execute(select(LlmProvider).where(LlmProvider.provider_key == provider_key))
         ).scalar_one_or_none()
         if prov is not None:
             prov.last_tested_at = datetime.now(UTC)

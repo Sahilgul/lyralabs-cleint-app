@@ -6,11 +6,10 @@ pairs and promotes repeated tool sequences to the skills table.
 
 from __future__ import annotations
 
-from sqlalchemy import text
-
 from lyra_core.agent.skill_crystallizer import mine_and_promote_skills
 from lyra_core.common.logging import get_logger
 from lyra_core.db.session import async_session
+from sqlalchemy import text
 
 log = get_logger(__name__)
 

@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
-
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.ghl.calendars import (
     GhlBookAppointment,
@@ -78,9 +77,7 @@ async def test_books_appointment(make_ctx) -> None:
 async def test_handles_response_without_appointment_wrapper(make_ctx) -> None:
     ctx = make_ctx(creds=_creds())
     with respx.mock(base_url=GHL_BASE) as mock:
-        mock.post("/calendars/events/appointments").respond(
-            200, json={"id": "ap-2"}
-        )
+        mock.post("/calendars/events/appointments").respond(200, json={"id": "ap-2"})
         out = await GhlBookAppointment().run(ctx, _input())
     assert out.appointment_id == "ap-2"
 

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import io
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from googleapiclient.errors import HttpError
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.google import drive as drive_mod
 from lyra_core.tools.google.drive import (
@@ -155,7 +154,9 @@ async def test_drive_read_doc_exports_to_text(monkeypatch, make_ctx) -> None:
 async def test_drive_read_sheet_exports_to_csv_by_default(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.files.return_value.get.return_value.execute.return_value = {
-        "id": "f", "name": "S", "mimeType": "application/vnd.google-apps.spreadsheet"
+        "id": "f",
+        "name": "S",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
     }
     monkeypatch.setattr(drive_mod, "drive_service", lambda creds: svc)
 
@@ -172,16 +173,16 @@ async def test_drive_read_sheet_exports_to_csv_by_default(monkeypatch, make_ctx)
     out = await DriveRead().run(make_ctx(), DriveReadInput(file_id="f"))
     assert out.content_text == "a,b\n1,2\n"
     assert out.mime_type == "application/vnd.google-apps.spreadsheet"
-    svc.files.return_value.export_media.assert_called_once_with(
-        fileId="f", mimeType="text/csv"
-    )
+    svc.files.return_value.export_media.assert_called_once_with(fileId="f", mimeType="text/csv")
 
 
 @pytest.mark.asyncio
 async def test_drive_read_binary_uses_get_media(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.files.return_value.get.return_value.execute.return_value = {
-        "id": "f", "name": "n.pdf", "mimeType": "application/pdf"
+        "id": "f",
+        "name": "n.pdf",
+        "mimeType": "application/pdf",
     }
     monkeypatch.setattr(drive_mod, "drive_service", lambda creds: svc)
 
@@ -204,7 +205,9 @@ async def test_drive_read_binary_uses_get_media(monkeypatch, make_ctx) -> None:
 async def test_drive_read_truncates_when_exceeds_max(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.files.return_value.get.return_value.execute.return_value = {
-        "id": "f", "name": "big.txt", "mimeType": "text/plain"
+        "id": "f",
+        "name": "big.txt",
+        "mimeType": "text/plain",
     }
     monkeypatch.setattr(drive_mod, "drive_service", lambda creds: svc)
 
@@ -227,7 +230,9 @@ async def test_drive_read_truncates_when_exceeds_max(monkeypatch, make_ctx) -> N
 async def test_drive_read_wraps_http_error(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.files.return_value.get.return_value.execute.return_value = {
-        "id": "f", "name": "x", "mimeType": "text/plain"
+        "id": "f",
+        "name": "x",
+        "mimeType": "text/plain",
     }
     monkeypatch.setattr(drive_mod, "drive_service", lambda creds: svc)
 

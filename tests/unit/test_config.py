@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import base64
-import os
 
 import pytest
-
 from lyra_core.common.config import Settings, get_settings
+from pydantic import ValidationError
 
 
 def test_get_settings_is_cached() -> None:
@@ -81,7 +80,7 @@ def test_ghl_scopes_list_splits_on_spaces() -> None:
 
 
 def test_app_env_literal_only_accepts_known() -> None:
-    with pytest.raises(Exception):  # pydantic ValidationError
+    with pytest.raises(ValidationError):
         Settings(
             app_env="garbage",  # type: ignore[arg-type]
             master_encryption_key=base64.urlsafe_b64encode(b"a" * 32).decode(),

@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import BaseModel
-
 from lyra_core.agent.nodes import executor as executor_mod
 from lyra_core.agent.nodes.executor import _resolve_args, executor_node
 from lyra_core.agent.state import Plan, PlanStep
 from lyra_core.tools.base import Tool, ToolContext
 from lyra_core.tools.registry import default_registry
+from pydantic import BaseModel
 
 
 class _In(BaseModel):

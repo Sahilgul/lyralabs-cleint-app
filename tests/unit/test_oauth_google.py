@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 import respx
@@ -40,7 +40,9 @@ async def test_install_redirects_to_google(monkeypatch) -> None:
     monkeypatch.setattr(s, "google_oauth_scopes", "https://scope.a https://scope.b", raising=False)
 
     app = _build_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t", follow_redirects=False) as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t", follow_redirects=False
+    ) as c:
         r = await c.get("/oauth/google/install", params={"tenant_id": "tenant-1"})
     assert r.status_code in (302, 307)
     loc = r.headers["location"]

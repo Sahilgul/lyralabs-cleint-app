@@ -18,9 +18,7 @@ from ..db.models import AuditEvent
 
 
 def _hash_args(args: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(args, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 async def record_event(

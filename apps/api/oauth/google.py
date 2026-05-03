@@ -14,14 +14,12 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.crypto import encrypt_for_tenant
 from lyra_core.common.logging import get_logger
 from lyra_core.db.models import IntegrationConnection
 from lyra_core.db.session import async_session
+from sqlalchemy.dialects.postgresql import insert
 
 from ._state import decode_state, encode_state
 
@@ -29,7 +27,7 @@ router = APIRouter()
 log = get_logger(__name__)
 
 GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
+GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"  # noqa: S105 public OAuth token endpoint URL, not a secret
 GOOGLE_USERINFO = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
@@ -41,7 +39,7 @@ async def install(tenant_id: str = Query(...)) -> RedirectResponse:
         "client_id": settings.google_oauth_client_id,
         "redirect_uri": settings.google_oauth_redirect_uri,
         "response_type": "code",
-        "scope": " ".join(settings.google_scopes_list + ["openid", "email", "profile"]),
+        "scope": " ".join([*settings.google_scopes_list, "openid", "email", "profile"]),
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
@@ -52,7 +50,7 @@ async def install(tenant_id: str = Query(...)) -> RedirectResponse:
 
 
 @router.get("/callback")
-async def callback(request: Request, code: str = Query(...), state: str = Query(...)):  # noqa: ARG001
+async def callback(request: Request, code: str = Query(...), state: str = Query(...)):
     settings = get_settings()
     try:
         tenant_id, _redirect_to = decode_state(state)

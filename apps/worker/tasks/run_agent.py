@@ -19,7 +19,6 @@ import time
 from datetime import timedelta
 
 from arq import Retry
-
 from lyra_core.agent.checkpointer import checkpointer
 from lyra_core.agent.graph import build_agent_graph
 from lyra_core.channels.schema import InboundMessage, OutboundReply
@@ -124,9 +123,7 @@ async def _run(ctx: dict, message_json: str) -> dict:
             async with async_session() as s:
                 tenant = (
                     await s.execute(
-                        select(Tenant).where(
-                            Tenant.external_team_id == msg.tenant_external_id
-                        )
+                        select(Tenant).where(Tenant.external_team_id == msg.tenant_external_id)
                     )
                 ).scalar_one_or_none()
                 if tenant is None:
@@ -177,9 +174,7 @@ async def _run(ctx: dict, message_json: str) -> dict:
 
         async with phase("worker.load_context"):
             try:
-                living_artifact = await load_artifact(
-                    tenant_id, msg.client_id, msg.agent_thread_id
-                )
+                living_artifact = await load_artifact(tenant_id, msg.client_id, msg.agent_thread_id)
                 active_skills = await load_active_skills(tenant_id, msg.client_id)
             except Exception as exc:
                 log.info("worker.load_context.skipped", reason=str(exc))
@@ -212,7 +207,7 @@ async def _run(ctx: dict, message_json: str) -> dict:
         if not acquired:
             # Another job is active on this thread. Retry without counting
             # against the real-failure budget. With max_tries=25, this gives
-            # up to ~100s of patience (20 retries × 5s) before exhausting.
+            # up to ~100s of patience (20 retries x 5s) before exhausting.
             log.info("run_agent.lock_wait", thread_id=thread_id, job_try=ctx.get("job_try"))
             raise Retry(defer=timedelta(seconds=5))
 
@@ -232,7 +227,7 @@ async def _run(ctx: dict, message_json: str) -> dict:
                 if is_final or not _should_retry(exc):
                     await _post_dlq_error(tenant_id, msg.channel_id, msg.reply_thread_ts, job_id)
                     return {"status": "failed", "error": str(exc)}
-                raise Retry(defer=timedelta(seconds=30))
+                raise Retry(defer=timedelta(seconds=30)) from exc
             finally:
                 await saver_cm.__aexit__(None, None, None)
         finally:
@@ -306,9 +301,7 @@ async def _resume(ctx: dict, *, job_id: str, decision: str, user_id: str) -> dic
                     return {"status": "already_processed", "job_id": job_id}
 
                 # Claim succeeded — load the rest of the job fields we need.
-                job = (
-                    await s.execute(select(Job).where(Job.id == job_id))
-                ).scalar_one()
+                job = (await s.execute(select(Job).where(Job.id == job_id))).scalar_one()
                 thread_id = job.thread_id
                 tenant_id = job.tenant_id
                 channel_id = job.channel_id
@@ -344,7 +337,7 @@ async def _resume(ctx: dict, *, job_id: str, decision: str, user_id: str) -> dic
                 graph = build_agent_graph(saver)
                 async with phase("resume.graph_invoke"):
                     final = await graph.ainvoke(
-                        Command(resume={"decision": decision}),  # type: ignore[arg-type]
+                        Command(resume={"decision": decision}),
                         config=config,
                     )
             except Exception as exc:
@@ -354,7 +347,7 @@ async def _resume(ctx: dict, *, job_id: str, decision: str, user_id: str) -> dic
                 if is_final or not _should_retry(exc):
                     await _post_dlq_error(tenant_id, channel_id, thread_ts, job_id)
                     return {"status": "failed", "error": str(exc)}
-                raise Retry(defer=timedelta(seconds=30))
+                raise Retry(defer=timedelta(seconds=30)) from exc
             finally:
                 await saver_cm.__aexit__(None, None, None)
         finally:

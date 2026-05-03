@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from lyra_core.channels.slack.adapter import build_slack_app
 from lyra_core.common.config import get_settings
 from lyra_core.common.logging import configure_logging, get_logger
@@ -36,7 +35,7 @@ log = get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
+async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(level=settings.log_level, json_logs=settings.is_prod)
     log.info("api.startup", env=settings.app_env)
@@ -86,7 +85,7 @@ async def slack_install(req: Request):
 
 @app.get("/oauth/slack/callback")
 async def slack_callback(req: Request):
-    from lyra_core.channels.slack.install_store import (  # noqa: PLC0415
+    from lyra_core.channels.slack.install_store import (
         _current_tenant_hint,
         _state_to_tenant,
     )

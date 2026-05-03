@@ -20,10 +20,9 @@ import asyncio
 import sys
 from uuid import UUID
 
-from sqlalchemy import select
-
 from lyra_core.db.models import Tenant
 from lyra_core.db.session import async_session
+from sqlalchemy import select
 
 
 async def main() -> int:

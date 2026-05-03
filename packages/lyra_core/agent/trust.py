@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from ..tools.base import RiskProfile, TrustTier
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .state import PlanStep
 
 
-def classify_step(step: "PlanStep", tool: "Tool") -> RiskProfile:
+def classify_step(step: PlanStep, tool: Tool) -> RiskProfile:
     """Return a RiskProfile for a single plan step.
 
     Explicit `trust_tier` ClassVar on the tool takes precedence.
@@ -21,7 +21,7 @@ def classify_step(step: "PlanStep", tool: "Tool") -> RiskProfile:
     if not tool.requires_approval:
         return RiskProfile(tier=TrustTier.LOW, reversibility="reversible", blast_radius="single")
     tier: TrustTier = getattr(tool, "trust_tier", TrustTier.MEDIUM)
-    blast_radius = getattr(tool, "blast_radius", "single")
+    blast_radius = cast(Literal["single", "batch", "bulk"], getattr(tool, "blast_radius", "single"))
     if tier == TrustTier.HIGH or blast_radius == "bulk":
         return RiskProfile(
             tier=TrustTier.HIGH,

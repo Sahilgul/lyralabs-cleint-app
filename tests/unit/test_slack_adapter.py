@@ -5,8 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from lyra_core.channels.slack import adapter as adapter_mod
 from lyra_core.channels.slack.adapter import (
     _disable_workspace,
     _enqueue_from_event,
@@ -340,9 +338,7 @@ async def test_enqueue_indicator_failure_is_swallowed() -> None:
     fake_response = MagicMock()
     fake_response.data = {"error": "missing_scope"}
     client = MagicMock()
-    client.assistant_threads_setStatus = AsyncMock(
-        side_effect=SlackApiError("nope", fake_response)
-    )
+    client.assistant_threads_setStatus = AsyncMock(side_effect=SlackApiError("nope", fake_response))
 
     with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
         await _enqueue_from_event(
@@ -366,7 +362,7 @@ async def test_enqueue_indicator_failure_is_swallowed() -> None:
 @pytest.mark.asyncio
 async def test_disable_workspace_marks_tenant_cancelled(monkeypatch) -> None:
     """`_disable_workspace` must clear bot tokens + cancel the tenant."""
-    from lyra_core.db.models import SlackInstallation, Tenant
+    from lyra_core.db.models import Tenant
 
     tenant = Tenant(external_team_id="T1", channel="slack", name="Acme")
     tenant.id = "tenant-uuid"

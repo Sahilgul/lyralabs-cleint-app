@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lyra_core.agent.living_artifact import format_artifact_for_prompt
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 
 import pytest
-
 from lyra_core.channels.teams.adapter import build_teams_app
 
 

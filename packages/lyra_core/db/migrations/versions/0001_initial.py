@@ -4,6 +4,7 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-04-30 00:00:00
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -25,9 +26,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("plan", sa.String(32), nullable=False, server_default="trial"),
         sa.Column("status", sa.String(32), nullable=False, server_default="active"),
-        sa.Column(
-            "trial_credit_remaining_usd", sa.Float(), nullable=False, server_default="100.0"
-        ),
+        sa.Column("trial_credit_remaining_usd", sa.Float(), nullable=False, server_default="100.0"),
         sa.Column(
             "settings", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
         ),
@@ -68,9 +67,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
-        sa.UniqueConstraint(
-            "tenant_id", "external_user_id", "channel", name="uq_user_per_tenant"
-        ),
+        sa.UniqueConstraint("tenant_id", "external_user_id", "channel", name="uq_user_per_tenant"),
     )
     op.create_index("ix_users_tenant_id", "users", ["tenant_id"])
 
@@ -111,7 +108,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
     )
-    op.create_index("ix_slack_install_team_enterprise", "slack_installations", ["team_id", "enterprise_id"])
+    op.create_index(
+        "ix_slack_install_team_enterprise", "slack_installations", ["team_id", "enterprise_id"]
+    )
     op.create_index("ix_slack_installations_tenant_id", "slack_installations", ["tenant_id"])
 
     op.create_table(
@@ -150,7 +149,9 @@ def upgrade() -> None:
             "tenant_id", "provider", "external_account_id", name="uq_integration_per_account"
         ),
     )
-    op.create_index("ix_integration_connections_tenant_id", "integration_connections", ["tenant_id"])
+    op.create_index(
+        "ix_integration_connections_tenant_id", "integration_connections", ["tenant_id"]
+    )
     op.create_index("ix_integration_connections_provider", "integration_connections", ["provider"])
 
     op.create_table(
@@ -170,9 +171,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(32), nullable=False, server_default="queued"),
         sa.Column("plan_json", postgresql.JSONB(), nullable=True),
         sa.Column("result_summary", sa.Text(), nullable=True),
-        sa.Column(
-            "artifact_urls", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")
-        ),
+        sa.Column("artifact_urls", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("cost_usd", sa.Float(), nullable=False, server_default="0.0"),
         sa.Column(

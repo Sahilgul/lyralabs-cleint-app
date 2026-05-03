@@ -11,10 +11,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from slack_sdk.oauth.installation_store import Installation
-
 from lyra_core.channels.slack.install_store import PostgresInstallationStore
 from lyra_core.db.models import SlackInstallation, Tenant
+from slack_sdk.oauth.installation_store import Installation
 
 
 def _installation() -> Installation:
@@ -81,7 +80,11 @@ async def test_ensure_tenant_links_pending_when_hint_given(monkeypatch) -> None:
     from lyra_core.channels.slack import install_store as mod
 
     pending = Tenant(
-        external_team_id="pending-user-uuid-1", channel="slack", name="sahil", plan="trial", status="active"
+        external_team_id="pending-user-uuid-1",
+        channel="slack",
+        name="sahil",
+        plan="trial",
+        status="active",
     )
     pending.id = "pending-tenant-uuid"
     committed: dict = {}
@@ -111,7 +114,9 @@ async def test_ensure_tenant_links_pending_when_hint_given(monkeypatch) -> None:
             committed["external_team_id"] = pending.external_team_id
 
     monkeypatch.setattr(mod, "async_session", FakeSession)
-    tid = await PostgresInstallationStore._ensure_tenant("T_REAL", "Acme Team", tenant_id_hint="pending-tenant-uuid")
+    tid = await PostgresInstallationStore._ensure_tenant(
+        "T_REAL", "Acme Team", tenant_id_hint="pending-tenant-uuid"
+    )
 
     assert tid == "pending-tenant-uuid"
     assert pending.external_team_id == "T_REAL"
@@ -158,7 +163,9 @@ async def test_ensure_tenant_creates_new_when_hint_not_pending(monkeypatch) -> N
             obj.id = "new-uuid-fallback"
 
     monkeypatch.setattr(mod, "async_session", FakeSession)
-    tid = await PostgresInstallationStore._ensure_tenant("T_NEW", "New Team", tenant_id_hint="real-tenant-uuid")
+    tid = await PostgresInstallationStore._ensure_tenant(
+        "T_NEW", "New Team", tenant_id_hint="real-tenant-uuid"
+    )
 
     assert tid == "new-uuid-fallback"
     assert isinstance(captured.get("added"), Tenant)
@@ -245,9 +252,7 @@ async def test_async_save_encrypts_tokens(monkeypatch) -> None:
     from lyra_core.common.crypto import decrypt_for_tenant
 
     assert decrypt_for_tenant("tenant-1", row.bot_token_encrypted) == "xoxb-test-bot"
-    assert (
-        decrypt_for_tenant("tenant-1", row.bot_refresh_token_encrypted) == "xoxe-1-refresh"
-    )
+    assert decrypt_for_tenant("tenant-1", row.bot_refresh_token_encrypted) == "xoxe-1-refresh"
 
 
 @pytest.mark.asyncio

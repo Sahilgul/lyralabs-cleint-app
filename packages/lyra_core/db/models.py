@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     JSON,
@@ -34,7 +34,7 @@ def _now() -> datetime:
 
 
 class Base(DeclarativeBase):
-    type_annotation_map = {dict[str, Any]: JSONB}
+    type_annotation_map: ClassVar[dict[Any, Any]] = {dict[str, Any]: JSONB}
 
 
 # -----------------------------------------------------------------------------
@@ -54,7 +54,9 @@ class Tenant(Base):
     external_team_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     channel: Mapped[str] = mapped_column(String(16))  # "slack" | "teams"
     name: Mapped[str] = mapped_column(String(256))
-    plan: Mapped[str] = mapped_column(String(32), default="trial")  # trial|team|enterprise|cancelled
+    plan: Mapped[str] = mapped_column(
+        String(32), default="trial"
+    )  # trial|team|enterprise|cancelled
     status: Mapped[str] = mapped_column(String(32), default="active")  # active|past_due|cancelled
     trial_credit_remaining_usd: Mapped[float] = mapped_column(Float, default=100.0)
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
@@ -89,9 +91,7 @@ class User(Base):
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     external_user_id: Mapped[str] = mapped_column(String(128))
     channel: Mapped[str] = mapped_column(String(16))  # slack|teams|admin
     display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -112,9 +112,7 @@ class AdminUser(Base):
     __tablename__ = "admin_users"
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     email: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="owner")
@@ -134,14 +132,10 @@ class SlackInstallation(Base):
     """
 
     __tablename__ = "slack_installations"
-    __table_args__ = (
-        Index("ix_slack_install_team_enterprise", "team_id", "enterprise_id"),
-    )
+    __table_args__ = (Index("ix_slack_install_team_enterprise", "team_id", "enterprise_id"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     team_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     team_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     enterprise_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -183,9 +177,7 @@ class Client(Base):
         Index("ix_clients_tenant_id", "tenant_id"),
         UniqueConstraint("tenant_id", "slug", name="uq_client_slug_per_tenant"),
         # Primary O(1) lookup: Slack adapter resolves inbound channel_id → client_id
-        UniqueConstraint(
-            "tenant_id", "primary_slack_channel_id", name="uq_client_slack_channel"
-        ),
+        UniqueConstraint("tenant_id", "primary_slack_channel_id", name="uq_client_slack_channel"),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
@@ -265,9 +257,7 @@ class IntegrationConnection(Base):
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     # Nullable: tenant-level connections (e.g. Google Workspace) have no client scope.
     # Client-scoped connections (e.g. GHL sub-account per agency client) set this.
     client_id: Mapped[str | None] = mapped_column(
@@ -307,9 +297,7 @@ class Job(Base):
     __table_args__ = (Index("ix_jobs_tenant_client", "tenant_id", "client_id"),)
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -342,9 +330,7 @@ class AuditEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -376,15 +362,11 @@ class WorkspaceArtifact(Base):
 
     __tablename__ = "workspace_artifacts"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "client_id", "thread_id", name="uq_artifact_per_thread"
-        ),
+        UniqueConstraint("tenant_id", "client_id", "thread_id", name="uq_artifact_per_thread"),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -410,9 +392,7 @@ class Skill(Base):
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -471,9 +451,7 @@ class LlmProvider(Base):
     api_base: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     enabled: Mapped[bool] = mapped_column(default=True)
-    last_tested_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

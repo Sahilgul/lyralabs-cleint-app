@@ -9,9 +9,9 @@ from .conversations import GhlSendMessage
 from .pipelines import GhlPipelineOpportunities
 
 __all__ = [
-    "GhlContactsSearch",
+    "GhlBookAppointment",
     "GhlContactsCreate",
+    "GhlContactsSearch",
     "GhlPipelineOpportunities",
     "GhlSendMessage",
-    "GhlBookAppointment",
 ]

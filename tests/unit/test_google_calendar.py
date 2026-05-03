@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from googleapiclient.errors import HttpError
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.google import calendar as cal_mod
 from lyra_core.tools.google.calendar import (
@@ -69,7 +68,10 @@ async def test_create_event_calls_insert_with_body(monkeypatch, make_ctx) -> Non
 async def test_create_event_omits_location_when_absent(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.events.return_value.insert.return_value.execute.return_value = {
-        "id": "x", "htmlLink": "", "start": {"dateTime": ""}, "end": {"dateTime": ""}
+        "id": "x",
+        "htmlLink": "",
+        "start": {"dateTime": ""},
+        "end": {"dateTime": ""},
     }
     monkeypatch.setattr(cal_mod, "calendar_service", lambda c: svc)
     await CalendarCreateEvent().run(make_ctx(), _input())
@@ -81,7 +83,10 @@ async def test_create_event_omits_location_when_absent(monkeypatch, make_ctx) ->
 async def test_create_event_handles_no_description(monkeypatch, make_ctx) -> None:
     svc = MagicMock()
     svc.events.return_value.insert.return_value.execute.return_value = {
-        "id": "x", "htmlLink": "", "start": {"dateTime": ""}, "end": {"dateTime": ""}
+        "id": "x",
+        "htmlLink": "",
+        "start": {"dateTime": ""},
+        "end": {"dateTime": ""},
     }
     monkeypatch.setattr(cal_mod, "calendar_service", lambda c: svc)
     await CalendarCreateEvent().run(make_ctx(), _input(description=None))

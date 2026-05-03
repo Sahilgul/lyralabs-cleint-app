@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from lyra_core.common import llm
 from lyra_core.common.llm import ModelTier, chat, estimate_cost
 from lyra_core.llm.router import ResolvedModel
@@ -97,9 +96,7 @@ class TestChat:
         assert "api_base" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_chat_forwards_extra_config(
-        self, monkeypatch, mock_litellm_response
-    ) -> None:
+    async def test_chat_forwards_extra_config(self, monkeypatch, mock_litellm_response) -> None:
         """Provider-specific config (e.g. OpenAI org, Azure deployment_id) flows
         through to LiteLLM as kwargs."""
         _patch_resolve(

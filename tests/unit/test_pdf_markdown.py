@@ -10,8 +10,6 @@ import base64
 from unittest.mock import MagicMock
 
 import pytest
-
-from lyra_core.tools.artifacts import pdf as pdf_mod
 from lyra_core.tools.artifacts.pdf import (
     PdfFromMarkdown,
     PdfFromMarkdownInput,
@@ -75,9 +73,7 @@ class TestMarkdownToHtml:
 
 class TestPdfFromMarkdown:
     @pytest.mark.asyncio
-    async def test_renders_and_appends_artifact(
-        self, monkeypatch, make_ctx
-    ) -> None:
+    async def test_renders_and_appends_artifact(self, monkeypatch, make_ctx) -> None:
         # Mock WeasyPrint HTML
         fake_html_cls = MagicMock()
         fake_instance = MagicMock()
@@ -113,9 +109,7 @@ class TestPdfFromMarkdown:
         assert artifacts[0]["description"] == "Q3 Report"
 
     @pytest.mark.asyncio
-    async def test_renders_html_template_includes_title_and_footer(
-        self, monkeypatch
-    ) -> None:
+    async def test_renders_html_template_includes_title_and_footer(self, monkeypatch) -> None:
         captured = {}
 
         class FakeHTML:
@@ -159,6 +153,4 @@ class TestPdfFromMarkdown:
 
         ctx = ToolContext(tenant_id="t-1")
         with pytest.raises(ToolError, match="PDF render failed"):
-            await PdfFromMarkdown().run(
-                ctx, PdfFromMarkdownInput(title="x", markdown="# x")
-            )
+            await PdfFromMarkdown().run(ctx, PdfFromMarkdownInput(title="x", markdown="# x"))

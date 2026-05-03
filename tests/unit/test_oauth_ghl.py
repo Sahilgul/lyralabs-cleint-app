@@ -27,7 +27,9 @@ async def test_install_redirects_to_marketplace() -> None:
     ) as c:
         r = await c.get("/oauth/ghl/install", params={"tenant_id": "tenant-1"})
     assert r.status_code in (302, 307)
-    assert r.headers["location"].startswith("https://marketplace.gohighlevel.com/oauth/chooselocation")
+    assert r.headers["location"].startswith(
+        "https://marketplace.gohighlevel.com/oauth/chooselocation"
+    )
 
 
 @pytest.mark.asyncio

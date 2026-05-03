@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, ClassVar, Generic, Literal, TypeVar
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +24,7 @@ class ToolError(Exception):
     """Raised by a tool when execution fails after retries."""
 
 
-class ApprovalRequired(Exception):
+class ApprovalRequired(Exception):  # noqa: N818 intentional
     """Raised by an executor when the tool needs approval before mutating."""
 
     def __init__(self, preview: dict[str, Any]):
@@ -32,10 +32,10 @@ class ApprovalRequired(Exception):
         self.preview = preview
 
 
-class TrustTier(str, Enum):
-    LOW = "low"       # read-only; auto-approved, no interrupt
+class TrustTier(StrEnum):
+    LOW = "low"  # read-only; auto-approved, no interrupt
     MEDIUM = "medium"  # write with limited blast radius; Approve/Reject button
-    HIGH = "high"     # irreversible or bulk; requires "I confirm" text confirmation
+    HIGH = "high"  # irreversible or bulk; requires "I confirm" text confirmation
 
 
 @dataclass
@@ -68,18 +68,14 @@ class ToolContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-InT = TypeVar("InT", bound=BaseModel)
-OutT = TypeVar("OutT", bound=BaseModel)
-
-
-class ToolResult(BaseModel, Generic[OutT]):
+class ToolResult[OutT: BaseModel](BaseModel):
     ok: bool
     data: OutT | None = None
     error: str | None = None
     cost_usd: float = 0.0
 
 
-class Tool(ABC, Generic[InT, OutT]):
+class Tool[InT: BaseModel, OutT: BaseModel](ABC):
     """Subclass and override `name`, `description`, `Input`, `Output`, `run`."""
 
     name: ClassVar[str]
@@ -132,7 +128,7 @@ class Tool(ABC, Generic[InT, OutT]):
             raise
         except ToolError as exc:
             return ToolResult(ok=False, error=str(exc))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
     def to_openai_schema(self) -> dict[str, Any]:

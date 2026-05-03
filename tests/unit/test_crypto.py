@@ -6,7 +6,6 @@ import base64
 
 import pytest
 from cryptography.fernet import InvalidToken
-
 from lyra_core.common.crypto import (
     _derive_tenant_key,
     decrypt_for_tenant,

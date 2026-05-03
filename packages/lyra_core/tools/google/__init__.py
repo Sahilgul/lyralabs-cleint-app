@@ -9,10 +9,10 @@ from .drive import DriveRead, DriveSearch
 from .sheets import SheetsAppend, SheetsRead
 
 __all__ = [
-    "DriveSearch",
-    "DriveRead",
-    "DocsCreate",
-    "SheetsRead",
-    "SheetsAppend",
     "CalendarCreateEvent",
+    "DocsCreate",
+    "DriveRead",
+    "DriveSearch",
+    "SheetsAppend",
+    "SheetsRead",
 ]

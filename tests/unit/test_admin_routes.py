@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from lyra_core.db.models import AuditEvent, IntegrationConnection, Job, Tenant
+from lyra_core.db.session import get_session
 
 from apps.api.admin.auth import AdminPrincipal, current_admin
 from apps.api.admin.routes import router as admin_router
-from lyra_core.db.models import AuditEvent, IntegrationConnection, Job, Tenant
-from lyra_core.db.session import get_session
 
 
 def _build(session: MagicMock, principal: AdminPrincipal) -> FastAPI:
@@ -189,8 +189,10 @@ async def test_list_audit_returns_rows() -> None:
 async def test_cost_summary_aggregates() -> None:
     s = _make_session()
     # Three execute calls in cost_summary: total, count, group-by
-    total_res = MagicMock(); total_res.scalar_one.return_value = 0.4242
-    count_res = MagicMock(); count_res.scalar_one.return_value = 7
+    total_res = MagicMock()
+    total_res.scalar_one.return_value = 0.4242
+    count_res = MagicMock()
+    count_res.scalar_one.return_value = 7
     group_res = MagicMock()
     group_res.all.return_value = [
         ("anthropic/claude-sonnet-4-5", 0.3),
@@ -215,12 +217,15 @@ async def test_billing_portal_creates_customer_when_missing(monkeypatch) -> None
 
     s = _make_session()
     t = _tenant()  # stripe_customer_id is None
-    res = MagicMock(); res.scalar_one.return_value = t
+    res = MagicMock()
+    res.scalar_one.return_value = t
     s.execute.return_value = res
 
-    fake_cust = MagicMock(); fake_cust.id = "cus_X"
+    fake_cust = MagicMock()
+    fake_cust.id = "cus_X"
     monkeypatch.setattr(routes.stripe.Customer, "create", lambda **kw: fake_cust)
-    fake_portal = MagicMock(); fake_portal.url = "https://billing.example/portal/abc"
+    fake_portal = MagicMock()
+    fake_portal.url = "https://billing.example/portal/abc"
     monkeypatch.setattr(routes.stripe.billing_portal.Session, "create", lambda **kw: fake_portal)
 
     app = _build(s, _admin())
@@ -239,10 +244,12 @@ async def test_checkout_uses_existing_customer(monkeypatch) -> None:
     s = _make_session()
     t = _tenant()
     t.stripe_customer_id = "cus_existing"
-    res = MagicMock(); res.scalar_one.return_value = t
+    res = MagicMock()
+    res.scalar_one.return_value = t
     s.execute.return_value = res
 
-    fake_sess = MagicMock(); fake_sess.url = "https://checkout.example/sess/x"
+    fake_sess = MagicMock()
+    fake_sess.url = "https://checkout.example/sess/x"
     monkeypatch.setattr(routes.stripe.checkout.Session, "create", lambda **kw: fake_sess)
 
     customer_create_called = False

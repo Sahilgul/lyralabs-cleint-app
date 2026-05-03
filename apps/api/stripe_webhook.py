@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import stripe
 from fastapi import APIRouter, Header, HTTPException, Request
-from sqlalchemy import select
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.logging import get_logger
 from lyra_core.db.models import Tenant
 from lyra_core.db.session import async_session
+from sqlalchemy import select
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -36,7 +35,9 @@ async def stripe_webhook(req: Request, stripe_signature: str = Header(...)):
             secret=settings.stripe_webhook_secret,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"signature verification failed: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"signature verification failed: {exc}"
+        ) from None
 
     etype = event["type"]
     obj = event["data"]["object"]

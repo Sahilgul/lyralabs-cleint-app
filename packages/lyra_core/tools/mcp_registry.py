@@ -99,7 +99,7 @@ async def discover_and_register_tools(
     tenant_id: str,
     client_id: str | None,
     headers: dict[str, str],
-    registry: "ToolRegistry",
+    registry: ToolRegistry,
 ) -> list[str]:
     """Discover MCP tools and register them in the registry. Idempotent; 24h cache.
 
@@ -120,7 +120,7 @@ async def discover_and_register_tools(
     from .mcp_adapter import _make_mcp_tool_adapter
 
     mc = MultiServerMCPClient(
-        {server_key: {"url": config.url, "transport": config.transport, "headers": headers}}
+        {server_key: {"url": config.url, "transport": config.transport, "headers": headers}}  # type: ignore[dict-item, misc]
     )
     lc_tools = await mc.get_tools()
     registered: list[str] = []

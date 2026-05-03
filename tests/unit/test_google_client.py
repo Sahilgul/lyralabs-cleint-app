@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from google.oauth2.credentials import Credentials
-
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.google import _client as client_mod
 

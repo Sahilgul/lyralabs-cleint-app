@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from lyra_core.db.models import Tenant
 
 from apps.api import stripe_webhook as webhook_mod
-from lyra_core.db.models import Tenant
 
 
 def _app() -> FastAPI:

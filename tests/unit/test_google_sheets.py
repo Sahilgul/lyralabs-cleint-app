@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from googleapiclient.errors import HttpError
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.google import sheets as sheets_mod
 from lyra_core.tools.google.sheets import (
@@ -61,9 +60,7 @@ async def test_sheets_read_wraps_http_error(monkeypatch, make_ctx) -> None:
     monkeypatch.setattr(sheets_mod, "sheets_service", lambda c: svc)
 
     with pytest.raises(ToolError, match="Sheets read failed"):
-        await SheetsRead().run(
-            make_ctx(), SheetsReadInput(spreadsheet_id="x", range_a1="y")
-        )
+        await SheetsRead().run(make_ctx(), SheetsReadInput(spreadsheet_id="x", range_a1="y"))
 
 
 @pytest.mark.asyncio

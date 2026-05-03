@@ -127,9 +127,7 @@ async def get_credentials(
         )
 
 
-async def _refresh_token(
-    *, provider: str, refresh_token: str
-) -> tuple[str, str | None, datetime]:
+async def _refresh_token(*, provider: str, refresh_token: str) -> tuple[str, str | None, datetime]:
     settings = get_settings()
     if provider == "google":
         async with httpx.AsyncClient(timeout=15) as c:

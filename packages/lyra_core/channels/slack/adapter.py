@@ -39,11 +39,12 @@ class _TenantAwareOAuthFlow(AsyncOAuthFlow):
         sig = sig_values[0] if sig_values else None
         if sig:
             try:
-                from apps.api.oauth._state import decode_state  # noqa: PLC0415
+                from apps.api.oauth._state import decode_state
+
                 tenant_id, _ = decode_state(sig)
                 _state_to_tenant[state] = tenant_id
             except Exception:
-                pass
+                log.debug("slack.oauth.state_decode_failed", exc_info=True)
         return state
 
 
@@ -59,9 +60,7 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
     settings = get_settings()
 
     has_oauth = bool(
-        settings.slack_signing_secret
-        and settings.slack_client_id
-        and settings.slack_client_secret
+        settings.slack_signing_secret and settings.slack_client_id and settings.slack_client_secret
     )
 
     if has_oauth:
@@ -98,7 +97,7 @@ def build_slack_app() -> tuple[AsyncApp, AsyncSlackRequestHandler]:
         )
         app = AsyncApp(
             signing_secret=settings.slack_signing_secret or "missing",
-            token="xoxb-missing",
+            token="xoxb-missing",  # noqa: S106 placeholder used when Slack isn't configured
             process_before_response=False,
         )
 
@@ -150,7 +149,7 @@ def _register_http_retry_middleware(app: AsyncApp) -> None:
     """
 
     @app.middleware
-    async def _drop_slack_retries(request, next_):  # type: ignore[no-untyped-def]  # noqa: ANN001
+    async def _drop_slack_retries(request, next_):
         retry_num = request.headers.get("x-slack-retry-num")
         if retry_num:
             log.info(
@@ -226,25 +225,29 @@ def _register_event_handlers(app: AsyncApp) -> None:
     async def _handle_approval_action(ack: Any, body: dict[str, Any], client: Any) -> None:
         """User clicked Approve/Reject button on a preview card."""
         await ack()
-        from lyra_core.worker.queue import enqueue_resume_agent  # noqa: PLC0415
+        from lyra_core.worker.queue import enqueue_resume_agent
 
         action = body["actions"][0]
         value = action.get("value", "")  # "approved:<job_id>" | "rejected:<job_id>"
         decision, _, job_id = value.partition(":")
-        await enqueue_resume_agent(
-            job_id=job_id, decision=decision, user_id=body["user"]["id"]
-        )
+        await enqueue_resume_agent(job_id=job_id, decision=decision, user_id=body["user"]["id"])
 
         # Replace the buttons with a status line so the card doesn't stay interactive.
-        label = "✅ Approved — running now." if decision == "approved" else "❌ Rejected — nothing was changed."
+        label = (
+            "✅ Approved — running now."
+            if decision == "approved"
+            else "❌ Rejected — nothing was changed."
+        )
         message = body.get("message", {})
         existing_blocks = message.get("blocks", [])
         # Keep header + body blocks, drop the actions block, append status.
         updated_blocks = [b for b in existing_blocks if b.get("type") != "actions"]
-        updated_blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": label},
-        })
+        updated_blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": label},
+            }
+        )
         try:
             await client.chat_update(
                 channel=body["channel"]["id"],
@@ -253,7 +256,8 @@ def _register_event_handlers(app: AsyncApp) -> None:
                 text=label,
             )
         except Exception:
-            pass  # non-critical — card update failure shouldn't block execution
+            # non-critical — card update failure shouldn't block execution
+            log.debug("slack.approval.card_update_failed", exc_info=True)
 
     app.action("approval_approve")(_handle_approval_action)
     app.action("approval_reject")(_handle_approval_action)
@@ -340,7 +344,7 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     so the user sees feedback within ~100ms instead of waiting for the
     worker to post the real reply (~3-5s).
     """
-    from lyra_core.worker.queue import enqueue_run_agent  # noqa: PLC0415
+    from lyra_core.worker.queue import enqueue_run_agent
 
     event = body.get("event") or {}
     is_dm = event.get("channel_type") == "im"
@@ -357,7 +361,9 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
         try:
             client_id = await _resolve_client_id(team_id, channel_id)
         except Exception:
-            log.warning("slack.client_resolve.error", team=team_id, channel=channel_id, exc_info=True)
+            log.warning(
+                "slack.client_resolve.error", team=team_id, channel=channel_id, exc_info=True
+            )
 
     if slack_thread_ts:
         reply_thread_ts: str | None = slack_thread_ts

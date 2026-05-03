@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lyra_core.agent.skill_crystallizer import (
     MINE_FREQUENCY_THRESHOLD,
     _arg_schema_shape,

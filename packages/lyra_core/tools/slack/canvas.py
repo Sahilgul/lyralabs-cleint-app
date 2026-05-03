@@ -77,6 +77,7 @@ class CanvasCreate(Tool[CanvasCreateInput, CanvasCreateOutput]):
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.canvas.create failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         canvas_id = resp.data.get("canvas_id") or ""
         # Slack doesn't return a canonical URL on create -- best-effort
         # construction; the model can also fall back to "your canvas is

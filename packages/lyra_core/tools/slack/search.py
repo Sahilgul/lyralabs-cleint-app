@@ -63,9 +63,7 @@ class SearchMessages(Tool[SearchMessagesInput, SearchMessagesOutput]):
     Input = SearchMessagesInput
     Output = SearchMessagesOutput
 
-    async def run(
-        self, ctx: ToolContext, args: SearchMessagesInput
-    ) -> SearchMessagesOutput:
+    async def run(self, ctx: ToolContext, args: SearchMessagesInput) -> SearchMessagesOutput:
         try:
             token = await _user_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:
@@ -73,13 +71,12 @@ class SearchMessages(Tool[SearchMessagesInput, SearchMessagesOutput]):
 
         client = AsyncWebClient(token=token)
         try:
-            resp = await client.search_messages(
-                query=args.query, count=args.count, sort=args.sort
-            )
+            resp = await client.search_messages(query=args.query, count=args.count, sort=args.sort)
         except SlackApiError as exc:
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.search.messages failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         msgs_block = resp.data.get("messages") or {}
         matches_raw: list[dict[str, Any]] = msgs_block.get("matches", []) or []
         return SearchMessagesOutput(

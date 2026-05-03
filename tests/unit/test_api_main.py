@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 @pytest.fixture
 def app():
     from apps.api.main import app as fastapi_app
+
     return fastapi_app
 
 

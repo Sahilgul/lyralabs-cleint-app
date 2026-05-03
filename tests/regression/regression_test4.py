@@ -17,10 +17,9 @@ Fix: pass kwargs directly to enqueue_job:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Test
@@ -43,9 +42,7 @@ async def test_enqueue_resume_agent_passes_kwargs_directly(monkeypatch):
     async def _fake_get_pool():
         return mock_pool
 
-    monkeypatch.setattr(
-        "lyra_core.worker.queue._get_pool", _fake_get_pool
-    )
+    monkeypatch.setattr("lyra_core.worker.queue._get_pool", _fake_get_pool)
 
     from lyra_core.worker.queue import enqueue_resume_agent
 

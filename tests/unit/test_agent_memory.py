@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-
 from lyra_core.agent import memory as memory_mod
 from lyra_core.agent.memory import (
     collection_for,
@@ -256,9 +255,7 @@ async def test_ensure_tenant_collection_no_op_when_exists(monkeypatch) -> None:
             pass
 
         async def get_collections(self):
-            return types.SimpleNamespace(
-                collections=[types.SimpleNamespace(name="tenant_abc")]
-            )
+            return types.SimpleNamespace(collections=[types.SimpleNamespace(name="tenant_abc")])
 
         async def create_collection(self, **kw):
             created.append(kw)

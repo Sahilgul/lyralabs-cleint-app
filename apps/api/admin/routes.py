@@ -5,14 +5,10 @@ Scoped to the caller's tenant via the JWT `tenant_id` claim.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import desc, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from lyra_core.common.config import get_settings
 from lyra_core.db.models import (
     AuditEvent,
@@ -21,6 +17,9 @@ from lyra_core.db.models import (
     Tenant,
 )
 from lyra_core.db.session import get_session
+from pydantic import BaseModel
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import CurrentAdmin
 
@@ -95,12 +94,16 @@ async def list_integrations(
     s: Annotated[AsyncSession, Depends(get_session)],
 ) -> list[IntegrationOut]:
     rows = (
-        await s.execute(
-            select(IntegrationConnection)
-            .where(IntegrationConnection.tenant_id == admin.tenant_id)
-            .order_by(IntegrationConnection.provider)
+        (
+            await s.execute(
+                select(IntegrationConnection)
+                .where(IntegrationConnection.tenant_id == admin.tenant_id)
+                .order_by(IntegrationConnection.provider)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [IntegrationOut.model_validate(r.__dict__) for r in rows]
 
 
@@ -131,13 +134,17 @@ async def list_jobs(
     limit: int = 50,
 ) -> list[JobOut]:
     rows = (
-        await s.execute(
-            select(Job)
-            .where(Job.tenant_id == admin.tenant_id)
-            .order_by(desc(Job.created_at))
-            .limit(limit)
+        (
+            await s.execute(
+                select(Job)
+                .where(Job.tenant_id == admin.tenant_id)
+                .order_by(desc(Job.created_at))
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         JobOut(
             id=r.id,
@@ -160,13 +167,17 @@ async def list_audit(
     limit: int = 200,
 ) -> list[AuditOut]:
     rows = (
-        await s.execute(
-            select(AuditEvent)
-            .where(AuditEvent.tenant_id == admin.tenant_id)
-            .order_by(desc(AuditEvent.ts))
-            .limit(limit)
+        (
+            await s.execute(
+                select(AuditEvent)
+                .where(AuditEvent.tenant_id == admin.tenant_id)
+                .order_by(desc(AuditEvent.ts))
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         AuditOut(
             id=r.id,
@@ -221,7 +232,9 @@ async def billing_portal(
 
     t = (await s.execute(select(Tenant).where(Tenant.id == admin.tenant_id))).scalar_one()
     if not t.stripe_customer_id:
-        cust = stripe.Customer.create(name=t.name, metadata={"tenant_id": t.id, "email": admin.email})
+        cust = stripe.Customer.create(
+            name=t.name, metadata={"tenant_id": t.id, "email": admin.email}
+        )
         t.stripe_customer_id = cust.id
         await s.flush()
 
@@ -242,7 +255,9 @@ async def checkout(
 
     t = (await s.execute(select(Tenant).where(Tenant.id == admin.tenant_id))).scalar_one()
     if not t.stripe_customer_id:
-        cust = stripe.Customer.create(name=t.name, metadata={"tenant_id": t.id, "email": admin.email})
+        cust = stripe.Customer.create(
+            name=t.name, metadata={"tenant_id": t.id, "email": admin.email}
+        )
         t.stripe_customer_id = cust.id
         await s.flush()
 
@@ -254,4 +269,4 @@ async def checkout(
         cancel_url=f"{settings.admin_base_url}/billing?status=cancelled",
         subscription_data={"metadata": {"tenant_id": t.id}},
     )
-    return {"url": sess.url}
+    return {"url": sess.url or ""}

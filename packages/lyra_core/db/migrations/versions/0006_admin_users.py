@@ -21,11 +21,19 @@ def upgrade() -> None:
     op.create_table(
         "admin_users",
         sa.Column("id", postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column("tenant_id", postgresql.UUID(as_uuid=False), sa.ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "tenant_id",
+            postgresql.UUID(as_uuid=False),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("email", sa.String(256), nullable=False, unique=True),
         sa.Column("password_hash", sa.Text, nullable=False),
         sa.Column("role", sa.String(32), nullable=False, server_default="owner"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
     )
 
 

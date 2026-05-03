@@ -61,14 +61,15 @@ class PostgresInstallationStore(AsyncInstallationStore):
         return self._logger or log  # type: ignore[return-value]
 
     @staticmethod
-    async def _ensure_tenant(team_id: str, team_name: str | None, tenant_id_hint: str | None = None) -> str:
+    async def _ensure_tenant(
+        team_id: str, team_name: str | None, tenant_id_hint: str | None = None
+    ) -> str:
         """Get-or-create the tenant row keyed on Slack team_id.
 
         If `tenant_id_hint` is provided (passed via OAuth metadata from a
         prior admin registration), we link the existing pending tenant to this
         Slack team instead of creating a new one.
         """
-        from ...db.models import AdminUser  # noqa: PLC0415
 
         async with async_session() as s:
             # Check if there's already a tenant with this Slack team_id.
@@ -170,7 +171,7 @@ class PostgresInstallationStore(AsyncInstallationStore):
             await s.commit()
             # New install / re-install: drop any cached bot token from a
             # prior installation so the very next reply uses the new one.
-            from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+            from .poster import invalidate_bot_token_cache
 
             invalidate_bot_token_cache(tenant_id)
             log.info("slack.install.saved", team_id=team_id, tenant_id=tenant_id)
@@ -223,9 +224,7 @@ class PostgresInstallationStore(AsyncInstallationStore):
                     row.tenant_id, bot.bot_refresh_token
                 )
             if bot.bot_token_expires_at is not None:
-                row.bot_token_expires_at = datetime.fromtimestamp(
-                    bot.bot_token_expires_at, tz=UTC
-                )
+                row.bot_token_expires_at = datetime.fromtimestamp(bot.bot_token_expires_at, tz=UTC)
             if bot.bot_id:
                 row.bot_id = bot.bot_id
             if bot.bot_user_id:
@@ -238,7 +237,7 @@ class PostgresInstallationStore(AsyncInstallationStore):
             # (~10 min later) and Slack would reject every reply with
             # `invalid_auth` for that window -- the original symptom that
             # made us add cache invalidation here in the first place.
-            from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+            from .poster import invalidate_bot_token_cache
 
             invalidate_bot_token_cache(row.tenant_id)
             log.info(
@@ -257,15 +256,15 @@ class PostgresInstallationStore(AsyncInstallationStore):
             enterprise_name=row.enterprise_name,
             team_id=row.team_id,
             team_name=row.team_name,
-            bot_token=decrypt_for_tenant(tenant_id, row.bot_token_encrypted),
-            bot_id=row.bot_id,
-            bot_user_id=row.bot_user_id,
+            bot_token=decrypt_for_tenant(tenant_id, row.bot_token_encrypted or ""),
+            bot_id=row.bot_id or "",
+            bot_user_id=row.bot_user_id or "",
             bot_scopes=(row.bot_scopes or "").split(",") if row.bot_scopes else [],
             # Don't expose refresh_token to Bolt — we handle rotation ourselves.
             # Returning it would cause Bolt to attempt a concurrent rotation.
             bot_refresh_token=None,
             bot_token_expires_at=None,
-            installed_at=row.installed_at.timestamp() if row.installed_at else None,
+            installed_at=row.installed_at.timestamp() if row.installed_at else 0.0,
         )
 
     async def _try_rotate(self, row: SlackInstallation, tenant_id: str) -> bool:
@@ -285,10 +284,14 @@ class PostgresInstallationStore(AsyncInstallationStore):
             return False
 
         # Stable lock key derived from team_id (fits in int64).
-        lock_key = int.from_bytes(row.team_id.encode()[:8].ljust(8, b"\x00"), "big") & 0x7FFFFFFFFFFFFFFF
+        lock_key = (
+            int.from_bytes((row.team_id or "").encode()[:8].ljust(8, b"\x00"), "big")
+            & 0x7FFFFFFFFFFFFFFF
+        )
 
         new_token: str | None = None
         new_expires_at: datetime | None = None
+        current: SlackInstallation | None = None
 
         async with async_session() as s:
             async with s.begin():
@@ -308,7 +311,10 @@ class PostgresInstallationStore(AsyncInstallationStore):
                     ).scalar_one_or_none()
                     if current is None:
                         return False
-                    if current.bot_token_expires_at and current.bot_token_expires_at.timestamp() > time() + 60:
+                    if (
+                        current.bot_token_expires_at
+                        and current.bot_token_expires_at.timestamp() > time() + 60
+                    ):
                         # Another worker already refreshed.
                         row.bot_token_encrypted = current.bot_token_encrypted
                         row.bot_refresh_token_encrypted = current.bot_refresh_token_encrypted
@@ -319,7 +325,9 @@ class PostgresInstallationStore(AsyncInstallationStore):
                         log.error("slack.rotation.no_refresh_token", team_id=row.team_id)
                         return False
 
-                    refresh_token = decrypt_for_tenant(tenant_id, current.bot_refresh_token_encrypted)
+                    refresh_token = decrypt_for_tenant(
+                        tenant_id, current.bot_refresh_token_encrypted
+                    )
                     try:
                         client = AsyncWebClient(token=None)
                         resp = await client.oauth_v2_access(
@@ -333,16 +341,24 @@ class PostgresInstallationStore(AsyncInstallationStore):
                         return False
 
                     if resp.get("token_type") != "bot":
-                        log.error("slack.rotation.unexpected_token_type", team_id=row.team_id, data=resp.data)
+                        log.error(
+                            "slack.rotation.unexpected_token_type",
+                            team_id=row.team_id,
+                            data=resp.data,
+                        )
                         return False
 
                     new_token = resp["access_token"]
                     new_refresh = resp.get("refresh_token")
-                    new_expires_at = datetime.fromtimestamp(int(time()) + int(resp["expires_in"]), tz=UTC)
+                    new_expires_at = datetime.fromtimestamp(
+                        int(time()) + int(resp["expires_in"]), tz=UTC
+                    )
 
                     current.bot_token_encrypted = encrypt_for_tenant(tenant_id, new_token)
                     if new_refresh:
-                        current.bot_refresh_token_encrypted = encrypt_for_tenant(tenant_id, new_refresh)
+                        current.bot_refresh_token_encrypted = encrypt_for_tenant(
+                            tenant_id, new_refresh
+                        )
                     current.bot_token_expires_at = new_expires_at
                     # s.begin() context commits here, which also releases the advisory lock.
 
@@ -356,7 +372,11 @@ class PostgresInstallationStore(AsyncInstallationStore):
                         select(SlackInstallation).where(SlackInstallation.id == row.id)
                     )
                 ).scalar_one_or_none()
-            if fresh and fresh.bot_token_expires_at and fresh.bot_token_expires_at.timestamp() > time() + 60:
+            if (
+                fresh
+                and fresh.bot_token_expires_at
+                and fresh.bot_token_expires_at.timestamp() > time() + 60
+            ):
                 row.bot_token_encrypted = fresh.bot_token_encrypted
                 row.bot_refresh_token_encrypted = fresh.bot_refresh_token_encrypted
                 row.bot_token_expires_at = fresh.bot_token_expires_at
@@ -367,11 +387,14 @@ class PostgresInstallationStore(AsyncInstallationStore):
         if new_token is None:
             return False
 
+        assert current is not None
+        assert new_expires_at is not None
         row.bot_token_encrypted = current.bot_token_encrypted
         row.bot_refresh_token_encrypted = current.bot_refresh_token_encrypted
         row.bot_token_expires_at = current.bot_token_expires_at
 
-        from .poster import invalidate_bot_token_cache  # noqa: PLC0415
+        from .poster import invalidate_bot_token_cache
+
         invalidate_bot_token_cache(tenant_id)
         log.info(
             "slack.rotation.success",
@@ -403,7 +426,9 @@ class PostgresInstallationStore(AsyncInstallationStore):
                 log.error(
                     "slack.rotation.failed_returning_stale",
                     team_id=team_id,
-                    expires_at=row.bot_token_expires_at.isoformat() if row.bot_token_expires_at else None,
+                    expires_at=row.bot_token_expires_at.isoformat()
+                    if row.bot_token_expires_at
+                    else None,
                 )
                 # Return None so Bolt surfaces the error clearly rather than
                 # attempting to use a token Slack will reject.

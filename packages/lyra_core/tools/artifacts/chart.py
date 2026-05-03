@@ -93,7 +93,7 @@ async def _render_chart(ctx: ToolContext, args, *, kind: str):
 
     try:
         png = await asyncio.to_thread(_render)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ToolError(f"chart render failed: {exc}") from exc
 
     ctx.extra.setdefault("artifacts", []).append(
@@ -107,7 +107,9 @@ async def _render_chart(ctx: ToolContext, args, *, kind: str):
 
     out_cls = ChartLineOutput if kind == "line" else ChartBarOutput
     return out_cls(
-        filename=args.filename, size_bytes=len(png), content_b64=base64.b64encode(png).decode("ascii")
+        filename=args.filename,
+        size_bytes=len(png),
+        content_b64=base64.b64encode(png).decode("ascii"),
     )
 
 

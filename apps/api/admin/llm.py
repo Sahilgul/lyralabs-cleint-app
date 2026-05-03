@@ -28,10 +28,6 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from lyra_core.common.crypto import encrypt_platform
 from lyra_core.db.models import LlmModelAssignment, LlmProvider
 from lyra_core.db.session import get_session
@@ -41,6 +37,9 @@ from lyra_core.llm.router import (
     list_configured_providers,
     test_provider_connection,
 )
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import CurrentSuperAdmin
 
@@ -180,9 +179,7 @@ async def upsert_provider(
         raise HTTPException(404, f"unknown provider {provider_key!r}")
 
     row = (
-        await s.execute(
-            select(LlmProvider).where(LlmProvider.provider_key == provider_key)
-        )
+        await s.execute(select(LlmProvider).where(LlmProvider.provider_key == provider_key))
     ).scalar_one_or_none()
 
     if row is None:
@@ -190,9 +187,7 @@ async def upsert_provider(
         s.add(row)
 
     if body.api_key is not None:
-        row.api_key_encrypted = (
-            encrypt_platform(body.api_key) if body.api_key else None
-        )
+        row.api_key_encrypted = encrypt_platform(body.api_key) if body.api_key else None
     row.api_base = body.api_base or None
     row.extra_config = dict(body.extra_config or {})
     row.enabled = bool(body.enabled)
@@ -213,13 +208,11 @@ async def upsert_provider(
 @router.delete("/providers/{provider_key}")
 async def delete_provider(
     provider_key: str,
-    admin: CurrentSuperAdmin,  # noqa: ARG001 - logged via dependency, kept for auth
+    admin: CurrentSuperAdmin,
     s: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, str]:
     row = (
-        await s.execute(
-            select(LlmProvider).where(LlmProvider.provider_key == provider_key)
-        )
+        await s.execute(select(LlmProvider).where(LlmProvider.provider_key == provider_key))
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, "provider is not configured")
@@ -228,12 +221,16 @@ async def delete_provider(
     # otherwise the next chat call would silently fall back to env or
     # error out. Force the operator to flip the assignment first.
     in_use = (
-        await s.execute(
-            select(LlmModelAssignment.tier).where(
-                LlmModelAssignment.provider_key == provider_key
+        (
+            await s.execute(
+                select(LlmModelAssignment.tier).where(
+                    LlmModelAssignment.provider_key == provider_key
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if in_use:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -247,9 +244,7 @@ async def delete_provider(
     return {"status": "deleted"}
 
 
-@router.post(
-    "/providers/{provider_key}/test", response_model=TestConnectionOut
-)
+@router.post("/providers/{provider_key}/test", response_model=TestConnectionOut)
 async def test_provider(
     provider_key: str,
     body: TestConnectionIn,
@@ -266,8 +261,7 @@ async def test_provider(
         if not prefix_ok:
             raise HTTPException(
                 400,
-                f"model {body.model_id!r} doesn't match provider "
-                f"{provider_key!r} prefix",
+                f"model {body.model_id!r} doesn't match provider {provider_key!r} prefix",
             )
     ok, err = await test_provider_connection(provider_key, body.model_id)
     return TestConnectionOut(ok=ok, error=err)
@@ -309,9 +303,7 @@ async def set_assignment(
 
     # Don't let the operator activate a provider they haven't given keys to.
     prov = (
-        await s.execute(
-            select(LlmProvider).where(LlmProvider.provider_key == body.provider_key)
-        )
+        await s.execute(select(LlmProvider).where(LlmProvider.provider_key == body.provider_key))
     ).scalar_one_or_none()
     if prov is None or not prov.enabled or not prov.api_key_encrypted:
         raise HTTPException(
@@ -321,9 +313,7 @@ async def set_assignment(
         )
 
     row = (
-        await s.execute(
-            select(LlmModelAssignment).where(LlmModelAssignment.tier == tier)
-        )
+        await s.execute(select(LlmModelAssignment).where(LlmModelAssignment.tier == tier))
     ).scalar_one_or_none()
     if row is None:
         row = LlmModelAssignment(tier=tier)
@@ -355,9 +345,7 @@ async def clear_assignment(
 ) -> dict[str, str]:
     """Clear a tier's assignment -- router falls back to env-var settings."""
     row = (
-        await s.execute(
-            select(LlmModelAssignment).where(LlmModelAssignment.tier == tier)
-        )
+        await s.execute(select(LlmModelAssignment).where(LlmModelAssignment.tier == tier))
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, "no assignment for that tier")

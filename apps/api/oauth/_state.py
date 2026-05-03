@@ -9,7 +9,6 @@ from __future__ import annotations
 import time
 
 import jwt
-
 from lyra_core.common.config import get_settings
 
 _STATE_TTL_SECONDS = 600

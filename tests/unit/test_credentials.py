@@ -5,10 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 import respx
-
 from lyra_core.common.crypto import encrypt_for_tenant
 from lyra_core.db.models import IntegrationConnection
 from lyra_core.tools import credentials as creds_mod

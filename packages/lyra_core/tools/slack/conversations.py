@@ -97,6 +97,7 @@ class ConversationsHistory(Tool[ConversationsHistoryInput, ConversationsHistoryO
             # was removed; surface clearly so the model doesn't loop.
             raise ToolError(f"slack.conversations.history failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         raw_msgs = resp.data.get("messages", []) or []
         messages = [
             _SlackMessage(
@@ -130,9 +131,7 @@ class ConversationsRepliesOutput(BaseModel):
     messages: list[_SlackMessage]
 
 
-class ConversationsReplies(
-    Tool[ConversationsRepliesInput, ConversationsRepliesOutput]
-):
+class ConversationsReplies(Tool[ConversationsRepliesInput, ConversationsRepliesOutput]):
     name = "slack.conversations.replies"
     description = (
         "Read every message in a specific Slack thread. Useful when the user "
@@ -159,6 +158,7 @@ class ConversationsReplies(
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.conversations.replies failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         raw_msgs = resp.data.get("messages", []) or []
         return ConversationsRepliesOutput(
             channel_id=args.channel_id,

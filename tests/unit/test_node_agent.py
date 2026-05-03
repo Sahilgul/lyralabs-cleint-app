@@ -174,8 +174,17 @@ async def test_agent_node_continues_existing_history_without_reseeding(monkeypat
     """If `messages` already has content, agent_node must NOT re-seed user_request."""
     history = [
         {"role": "user", "content": "search alice"},
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "tc-1", "type": "function",
-            "function": {"name": "ghl.contacts.search", "arguments": "{}"}}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "type": "function",
+                    "function": {"name": "ghl.contacts.search", "arguments": "{}"},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": "tc-1", "content": "[]"},
     ]
     captured_messages = {}

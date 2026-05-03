@@ -12,9 +12,8 @@ from typing import Annotated
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
-from pydantic import BaseModel
-
 from lyra_core.common.config import get_settings
+from pydantic import BaseModel
 
 
 class AdminPrincipal(BaseModel):

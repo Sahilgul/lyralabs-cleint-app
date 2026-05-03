@@ -10,17 +10,17 @@ registration once real auth (Clerk/Supabase) replaces this flow.
 
 from __future__ import annotations
 
-import bcrypt
-import jwt
 from datetime import UTC, datetime, timedelta
-from fastapi import APIRouter, Header, HTTPException, status
-from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
 from typing import Annotated
 
+import bcrypt
+import jwt
+from fastapi import APIRouter, Header, HTTPException, status
 from lyra_core.common.config import get_settings
 from lyra_core.db.models import AdminUser, Client, Tenant
 from lyra_core.db.session import async_session
+from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
 
 router = APIRouter()
 
@@ -40,7 +40,7 @@ class LoginIn(BaseModel):
 
 class TokenOut(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 OAuth2 token-type literal, not a secret
 
 
 def _mint_jwt(tenant_id: str, email: str, role: str) -> str:
@@ -65,7 +65,9 @@ async def register(body: RegisterIn) -> TokenOut:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid passcode")
 
     if len(body.password) < 8:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "password must be at least 8 characters")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "password must be at least 8 characters"
+        )
 
     async with async_session() as s:
         # Prevent duplicate emails.
@@ -135,15 +137,17 @@ async def login(body: LoginIn) -> TokenOut:
 
 
 @router.get("/slack-install-url")
-async def slack_install_url(authorization: Annotated[str | None, Header()] = None) -> dict[str, str]:
+async def slack_install_url(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
     """Return a short-lived signed Slack install URL for the calling tenant.
 
     The `sig` param is a 10-minute JWT carrying tenant_id. The
     /oauth/slack/install endpoint verifies the signature before passing
     tenant_id to Bolt's metadata, preventing CSRF-style binding attacks.
     """
-    from apps.api.admin.auth import current_admin  # noqa: PLC0415
-    from apps.api.oauth._state import encode_state  # noqa: PLC0415
+    from apps.api.admin.auth import current_admin
+    from apps.api.oauth._state import encode_state
 
     principal = await current_admin(authorization=authorization)
     sig = encode_state(principal.tenant_id)

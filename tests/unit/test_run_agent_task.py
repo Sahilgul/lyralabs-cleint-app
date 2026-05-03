@@ -19,7 +19,7 @@ from apps.worker.tasks.run_agent import (
 def _make_ctx() -> dict:
     """Minimal arq context dict with a mock Redis client (lock always acquired)."""
     redis = AsyncMock()
-    redis.set = AsyncMock(return_value=True)   # lock acquired
+    redis.set = AsyncMock(return_value=True)  # lock acquired
     redis.delete = AsyncMock(return_value=1)
     return {"redis": redis, "job_try": 1}
 
@@ -274,9 +274,7 @@ async def test_resume_approved_marks_done(monkeypatch) -> None:
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
 
     fake_graph = MagicMock()
-    fake_graph.ainvoke = AsyncMock(
-        return_value={"final_summary": "ok", "total_cost_usd": 0.005}
-    )
+    fake_graph.ainvoke = AsyncMock(return_value={"final_summary": "ok", "total_cost_usd": 0.005})
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
     out = await _resume(_make_ctx(), job_id="job-1", decision="approved", user_id="u")
@@ -351,9 +349,7 @@ async def test_resume_graph_crash_marks_failed(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_mark_job_updates_fields(monkeypatch) -> None:
-    job = Job(
-        tenant_id="t", thread_id="t", user_id="u", user_request="x", status="running"
-    )
+    job = Job(tenant_id="t", thread_id="t", user_id="u", user_request="x", status="running")
     job.id = "j"
     _patch_session_chain(monkeypatch, [_FakeSession(job=job)])
 

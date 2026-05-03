@@ -86,7 +86,7 @@ async def phase(name: str, **fields: Any):
     _phase_log.info("phase.start", phase=name, **fields)
     try:
         yield
-    except BaseException as exc:  # noqa: BLE001 -- always re-raised below
+    except BaseException as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         _phase_log.warning(
             "phase.end",
@@ -115,7 +115,7 @@ def phase_sync(name: str, **fields: Any):
     _phase_log.info("phase.start", phase=name, **fields)
     try:
         yield
-    except BaseException as exc:  # noqa: BLE001
+    except BaseException as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         _phase_log.warning(
             "phase.end",

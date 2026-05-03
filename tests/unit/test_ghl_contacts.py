@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
-
 from lyra_core.tools.base import ToolError
 from lyra_core.tools.credentials import ProviderCredentials
 from lyra_core.tools.ghl.client import GHL_BASE
@@ -84,9 +83,7 @@ async def test_search_caps_results_to_limit(make_ctx) -> None:
             200,
             json={"contacts": [{"id": f"c-{i}"} for i in range(20)]},
         )
-        out = await GhlContactsSearch().run(
-            ctx, GhlContactsSearchInput(query="x", limit=3)
-        )
+        out = await GhlContactsSearch().run(ctx, GhlContactsSearchInput(query="x", limit=3))
     assert out.count == 3
 
 

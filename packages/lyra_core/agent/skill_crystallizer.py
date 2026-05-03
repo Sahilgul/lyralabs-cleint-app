@@ -44,16 +44,16 @@ def _sequence_hash(sequence: list[tuple[str, list[tuple[str, str]]]]) -> str:
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
-async def mine_and_promote_skills(
-    tenant_id: str, client_id: str | None
-) -> list[str]:
+async def mine_and_promote_skills(tenant_id: str, client_id: str | None) -> list[str]:
     """Mine audit_events and promote qualifying sequences to the skills table.
 
     Returns a list of newly promoted skill slugs (existing skills are updated
     with a fresh usage_count but not re-reported as new).
     """
     promoted: list[str] = []
-    client_filter = "AND client_id = :client_id" if client_id is not None else "AND client_id IS NULL"
+    client_filter = (
+        "AND client_id = :client_id" if client_id is not None else "AND client_id IS NULL"
+    )
 
     async with async_session() as s:
         rows = (
@@ -70,7 +70,7 @@ async def mine_and_promote_skills(
                       AND ts >= now() - interval '30 days'
                     GROUP BY job_id
                     HAVING count(*) >= 2
-                """),
+                """),  # noqa: S608 client_filter is a constant SQL fragment, not user input
                 {"tenant_id": tenant_id, "client_id": client_id},
             )
         ).fetchall()
@@ -81,7 +81,7 @@ async def mine_and_promote_skills(
             raw_args_list = row[2] or []
             sequence = [
                 (name, _arg_schema_shape(args))
-                for name, args in zip(tool_names, raw_args_list)
+                for name, args in zip(tool_names, raw_args_list, strict=True)
             ]
             h = _sequence_hash(sequence)
             count, _ = seq_counts.get(h, (0, sequence))
@@ -96,7 +96,7 @@ async def mine_and_promote_skills(
             existing = (
                 await s.execute(
                     text(
-                        "SELECT id FROM skills "
+                        "SELECT id FROM skills "  # noqa: S608 client_filter is a constant SQL fragment, not user input
                         "WHERE tenant_id = :tid "
                         f"{client_filter.replace('client_id', 'skills.client_id')} "
                         "AND slug = :slug"
@@ -129,16 +129,16 @@ async def mine_and_promote_skills(
     return promoted
 
 
-async def load_active_skills(
-    tenant_id: str, client_id: str | None
-) -> list[dict[str, Any]]:
+async def load_active_skills(tenant_id: str, client_id: str | None) -> list[dict[str, Any]]:
     """Return promoted skills for this (tenant, client). 5-minute in-process cache."""
     key = (tenant_id, client_id)
     cached = _SKILLS_CACHE.get(key)
     if cached and cached[1] > time.monotonic():
         return list(cached[0])
 
-    client_filter = "AND client_id = :client_id" if client_id is not None else "AND client_id IS NULL"
+    client_filter = (
+        "AND client_id = :client_id" if client_id is not None else "AND client_id IS NULL"
+    )
     async with async_session() as s:
         rows = (
             await s.execute(
@@ -148,7 +148,7 @@ async def load_active_skills(
                     WHERE tenant_id = :tenant_id {client_filter}
                     ORDER BY usage_count DESC
                     LIMIT 20
-                """),
+                """),  # noqa: S608 client_filter is a constant SQL fragment, not user input
                 {"tenant_id": tenant_id, "client_id": client_id},
             )
         ).fetchall()

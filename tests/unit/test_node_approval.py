@@ -50,9 +50,7 @@ class TestRouteAfterApproval:
         assert route_after_approval({"approval_decision": "approved"}) == "executor"  # type: ignore[arg-type]
 
     def test_rejected_goes_to_rejected_reply(self) -> None:
-        assert (
-            route_after_approval({"approval_decision": "rejected"}) == "rejected_reply"
-        )
+        assert route_after_approval({"approval_decision": "rejected"}) == "rejected_reply"
 
     def test_default_pending_goes_to_rejected_reply(self) -> None:
         assert route_after_approval({}) == "rejected_reply"  # type: ignore[arg-type]
@@ -236,6 +234,11 @@ async def test_rejected_reply_node_posts_message(monkeypatch) -> None:
     out = await rejected_reply_node(  # type: ignore[arg-type]
         {"thread_id": "thr", "channel_id": "ch", "tenant_id": "ten"}
     )
-    assert out == {"final_summary": "rejected_by_user"}
+    assert out["final_summary"] == "rejected_by_user"
     assert len(posted) == 1
     assert "rejected" in posted[0][1].text.lower()
+    # Rejection must be recorded in messages so a follow-up turn knows the
+    # plan was rejected (not still pending).
+    msgs = out["messages"]
+    assert msgs[-1]["role"] == "assistant"
+    assert "rejected" in msgs[-1]["content"].lower()

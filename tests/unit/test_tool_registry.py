@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from lyra_core.tools.base import Tool, ToolContext
 from lyra_core.tools.registry import ToolRegistry, default_registry
+from pydantic import BaseModel
 
 
 class _In(BaseModel):

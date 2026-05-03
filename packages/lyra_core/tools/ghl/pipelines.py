@@ -43,9 +43,7 @@ class GhlPipelineOpportunitiesOutput(BaseModel):
     count: int
 
 
-class GhlPipelineOpportunities(
-    Tool[GhlPipelineOpportunitiesInput, GhlPipelineOpportunitiesOutput]
-):
+class GhlPipelineOpportunities(Tool[GhlPipelineOpportunitiesInput, GhlPipelineOpportunitiesOutput]):
     name = "ghl.pipelines.opportunities"
     description = (
         "List opportunities in GHL pipelines, optionally filtered by stage and 'stuck' duration. "
@@ -76,9 +74,7 @@ class GhlPipelineOpportunities(
         data = await client.request("GET", "/opportunities/search", params=params)
 
         cutoff = (
-            datetime.now(UTC) - timedelta(days=args.stuck_for_days)
-            if args.stuck_for_days
-            else None
+            datetime.now(UTC) - timedelta(days=args.stuck_for_days) if args.stuck_for_days else None
         )
         opps: list[GhlOpportunity] = []
         for o in data.get("opportunities", []):
@@ -91,9 +87,7 @@ class GhlPipelineOpportunities(
                     updated_dt = None
             if cutoff and updated_dt and updated_dt > cutoff:
                 continue
-            days_in_stage = (
-                (datetime.now(UTC) - updated_dt).days if updated_dt else None
-            )
+            days_in_stage = (datetime.now(UTC) - updated_dt).days if updated_dt else None
             opps.append(
                 GhlOpportunity(
                     id=o.get("id", ""),

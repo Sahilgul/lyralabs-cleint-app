@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from lyra_core.agent.nodes.artifact import artifact_node
 
 

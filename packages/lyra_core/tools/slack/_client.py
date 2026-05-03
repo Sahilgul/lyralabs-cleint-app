@@ -25,7 +25,7 @@ from ...db.session import async_session
 log = get_logger(__name__)
 
 
-class SlackTokenMissing(RuntimeError):
+class SlackTokenMissing(RuntimeError):  # noqa: N818 intentional
     """Raised when the requested Slack token is not available for this tenant.
 
     Tools should catch this and surface a friendly message instructing the
@@ -50,9 +50,7 @@ async def _bot_token_for(tenant_id: str) -> str:
             )
         ).scalar_one_or_none()
     if row is None or row.bot_token_encrypted is None:
-        raise SlackTokenMissing(
-            f"No Slack bot token for tenant {tenant_id!r}. Re-install ARLO."
-        )
+        raise SlackTokenMissing(f"No Slack bot token for tenant {tenant_id!r}. Re-install ARLO.")
     return decrypt_for_tenant(tenant_id, row.bot_token_encrypted)
 
 

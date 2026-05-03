@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from lyra_core.agent.state import AgentState, Plan, PlanStep, StepResult
+from pydantic import ValidationError
 
 
 class TestPlanStep:
@@ -63,9 +62,7 @@ class TestPlan:
 
 class TestStepResult:
     def test_ok_with_data(self) -> None:
-        r = StepResult(
-            step_id="s1", tool_name="t", ok=True, data={"x": 1}, cost_usd=0.001
-        )
+        r = StepResult(step_id="s1", tool_name="t", ok=True, data={"x": 1}, cost_usd=0.001)
         assert r.ok is True
         assert r.data == {"x": 1}
         assert r.cost_usd == 0.001

@@ -19,12 +19,10 @@ tool_call_id matches every tool_call id in the preceding assistant message.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from lyra_core.agent.nodes.agent import SUBMIT_PLAN_TOOL_NAME, agent_node
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,10 +117,14 @@ async def test_plan_submission_closes_tool_call_loop(monkeypatch):
     assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
     assert assistant_msgs, "No assistant message saved to history"
     plan_assistant = next(
-        (m for m in assistant_msgs if any(
-            tc.get("function", {}).get("name") == SUBMIT_PLAN_TOOL_NAME
-            for tc in (m.get("tool_calls") or [])
-        )),
+        (
+            m
+            for m in assistant_msgs
+            if any(
+                tc.get("function", {}).get("name") == SUBMIT_PLAN_TOOL_NAME
+                for tc in (m.get("tool_calls") or [])
+            )
+        ),
         None,
     )
     assert plan_assistant is not None, "Assistant message with submit_plan_for_approval not found"
@@ -188,7 +190,7 @@ async def test_plan_rejection_followed_by_new_message_has_valid_history(monkeypa
             # All subsequent messages until the next assistant message.
             subsequent_tool_ids = {
                 m["tool_call_id"]
-                for m in messages[i + 1:]
+                for m in messages[i + 1 :]
                 if m.get("role") == "tool" and "tool_call_id" in m
             }
             orphaned = call_ids - subsequent_tool_ids

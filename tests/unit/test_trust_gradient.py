@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import BaseModel
-
-from lyra_core.agent.trust import classify_step, overall_plan_tier
 from lyra_core.agent.state import PlanStep
+from lyra_core.agent.trust import classify_step, overall_plan_tier
 from lyra_core.tools.base import RiskProfile, Tool, ToolContext, TrustTier
+from pydantic import BaseModel
 
 
 class _In(BaseModel):
@@ -78,6 +76,7 @@ class TestClassifyStep:
 
     def test_requires_approval_false_always_low(self) -> None:
         """Even if trust_tier=HIGH is declared, requires_approval=False wins."""
+
         class _Weird(Tool[_In, _Out]):
             name = "test.weird"
             description = "weird"

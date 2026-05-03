@@ -13,11 +13,8 @@ Fix: Buttons now use action_id="approval_approve" and action_id="approval_reject
 
 from __future__ import annotations
 
-import pytest
-
 from lyra_core.agent.nodes.approval import TrustTier, _plan_preview_blocks
 from lyra_core.agent.state import Plan, PlanStep
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,12 +74,7 @@ def test_approval_card_has_approve_and_reject_buttons():
     plan = _simple_plan()
     blocks = _plan_preview_blocks(plan, job_id="job-123", overall_tier=TrustTier.MEDIUM)
 
-    action_ids = _extract_action_ids(blocks)
-    values = [
-        el.get("value", "")
-        for block in blocks
-        for el in block.get("elements", [])
-    ]
+    values = [el.get("value", "") for block in blocks for el in block.get("elements", [])]
 
     assert any(v.startswith("approved:") for v in values), "Approve button missing"
     assert any(v.startswith("rejected:") for v in values), "Reject button missing"
@@ -125,9 +117,7 @@ def test_high_tier_plan_has_no_buttons():
     blocks = _plan_preview_blocks(plan, job_id="job-123", overall_tier=TrustTier.HIGH)
 
     action_ids = _extract_action_ids(blocks)
-    assert not action_ids, (
-        f"HIGH-tier plan should have no buttons, found action_ids: {action_ids}"
-    )
+    assert not action_ids, f"HIGH-tier plan should have no buttons, found action_ids: {action_ids}"
 
 
 def test_approval_card_job_id_embedded_in_button_values():
@@ -139,11 +129,7 @@ def test_approval_card_job_id_embedded_in_button_values():
     plan = _simple_plan()
     blocks = _plan_preview_blocks(plan, job_id=job_id, overall_tier=TrustTier.MEDIUM)
 
-    values = [
-        el.get("value", "")
-        for block in blocks
-        for el in block.get("elements", [])
-    ]
+    values = [el.get("value", "") for block in blocks for el in block.get("elements", [])]
 
     assert f"approved:{job_id}" in values, f"approved:{job_id} not found in button values"
     assert f"rejected:{job_id}" in values, f"rejected:{job_id} not found in button values"

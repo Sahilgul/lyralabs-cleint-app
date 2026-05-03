@@ -7,9 +7,9 @@ import time
 import jwt
 import pytest
 from fastapi import HTTPException
+from lyra_core.common.config import get_settings
 
 from apps.api.admin.auth import AdminPrincipal, current_admin
-from lyra_core.common.config import get_settings
 
 
 def _token(claims: dict) -> str:
@@ -54,8 +54,12 @@ async def test_non_bearer_scheme_raises_401() -> None:
 @pytest.mark.asyncio
 async def test_invalid_signature_raises_401() -> None:
     bad = jwt.encode(
-        {"tenant_id": "t", "email": "x", "iss": get_settings().admin_jwt_issuer,
-         "exp": int(time.time()) + 60},
+        {
+            "tenant_id": "t",
+            "email": "x",
+            "iss": get_settings().admin_jwt_issuer,
+            "exp": int(time.time()) + 60,
+        },
         "wrong-secret-padded-to-32-bytes!!",
         algorithm="HS256",
     )

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from lyra_core.tools.base import (
     ApprovalRequired,
     Tool,
@@ -12,6 +10,7 @@ from lyra_core.tools.base import (
     ToolError,
     ToolResult,
 )
+from pydantic import BaseModel
 
 
 class _InOk(BaseModel):

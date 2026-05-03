@@ -14,7 +14,7 @@ from ...common.audit import record_event
 from ...common.llm import ModelTier, chat
 from ...common.logging import get_logger
 from ...db.session import async_session
-from ..living_artifact import format_artifact_for_prompt, upsert_artifact
+from ..living_artifact import upsert_artifact
 from ..state import AgentState
 
 log = get_logger(__name__)
@@ -79,9 +79,7 @@ async def living_artifact_node(state: AgentState) -> dict[str, Any]:
             {
                 "role": "user",
                 "content": _DISTILL_USER.format(
-                    artifact=(
-                        json.dumps(current_body, indent=2) if current_body else "(empty)"
-                    ),
+                    artifact=(json.dumps(current_body, indent=2) if current_body else "(empty)"),
                     goal=goal,
                     results_summary=results_summary,
                     final_summary=state.get("final_summary") or "",
@@ -118,5 +116,5 @@ async def living_artifact_node(state: AgentState) -> dict[str, Any]:
                 )
                 await s.commit()
         except Exception:
-            pass
+            log.debug("living_artifact.audit_event_failed", exc_info=True)
         return {}

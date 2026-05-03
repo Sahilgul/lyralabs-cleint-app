@@ -64,6 +64,7 @@ class UsersInfo(Tool[UsersInfoInput, UsersInfoOutput]):
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.users.info failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         return UsersInfoOutput(user=_to_user(resp.data.get("user") or {}))
 
 
@@ -73,9 +74,7 @@ class UsersInfo(Tool[UsersInfoInput, UsersInfoOutput]):
 class UsersListInput(BaseModel):
     cursor: str | None = Field(
         default=None,
-        description=(
-            "Pagination cursor returned by a previous call. Omit on the first call."
-        ),
+        description=("Pagination cursor returned by a previous call. Omit on the first call."),
     )
     limit: int = Field(
         default=100,
@@ -117,10 +116,9 @@ class UsersList(Tool[UsersListInput, UsersListOutput]):
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.users.list failed: {err}") from exc
 
+        assert isinstance(resp.data, dict)
         members = [_to_user(u) for u in resp.data.get("members", []) or []]
-        next_cursor = (
-            (resp.data.get("response_metadata") or {}).get("next_cursor") or None
-        )
+        next_cursor = (resp.data.get("response_metadata") or {}).get("next_cursor") or None
         return UsersListOutput(members=members, next_cursor=next_cursor or None)
 
 

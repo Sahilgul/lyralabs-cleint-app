@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..common.logging import get_logger
 from .base import RiskProfile, Tool, ToolContext, ToolError, TrustTier
@@ -83,7 +83,13 @@ class McpToolAdapter(Tool[BaseModel, McpOutput]):
 
         config = MCP_SERVER_CONFIGS[self._server_key]
         mc = MultiServerMCPClient(
-            {self._server_key: {"url": config.url, "transport": config.transport, "headers": headers}}
+            {
+                self._server_key: {  # type: ignore[dict-item, misc]
+                    "url": config.url,
+                    "transport": config.transport,
+                    "headers": headers,
+                }
+            }
         )
         lc_tools = await mc.get_tools()
         tool = next((t for t in lc_tools if t.name == self._mcp_tool_name), None)

@@ -55,9 +55,7 @@ class DocsCreate(Tool[DocsCreateInput, DocsCreateOutput]):
             docs.documents().batchUpdate(
                 documentId=doc_id,
                 body={
-                    "requests": [
-                        {"insertText": {"location": {"index": 1}, "text": args.body_text}}
-                    ]
+                    "requests": [{"insertText": {"location": {"index": 1}, "text": args.body_text}}]
                 },
             ).execute()
 

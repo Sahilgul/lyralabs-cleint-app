@@ -32,18 +32,17 @@ Regression guards:
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, Field
-
 from lyra_core.agent.nodes.agent import _validate_plan_step_args
 from lyra_core.agent.state import Plan, PlanStep
 from lyra_core.tools.base import Tool, ToolContext, TrustTier
 from lyra_core.tools.registry import default_registry
+from pydantic import BaseModel, Field
 
 
 class _ContactCreateInput(BaseModel):
     email: str = Field(..., description="contact email")
-    firstName: str = Field(..., description="first name")
-    lastName: str = Field(..., description="last name")
+    firstName: str = Field(..., description="first name")  # noqa: N815 GHL API contract
+    lastName: str = Field(..., description="last name")  # noqa: N815 GHL API contract
     phone: str | None = Field(default=None)
 
 
@@ -194,13 +193,13 @@ def test_mcp_tool_uses_per_tool_args_schema_as_input():
     """
     from unittest.mock import MagicMock
 
-    from lyra_core.tools.mcp_adapter import _make_mcp_tool_adapter
     from lyra_core.tools.base import RiskProfile, TrustTier
+    from lyra_core.tools.mcp_adapter import _make_mcp_tool_adapter
 
     class _ContactsCreateSchema(BaseModel):
         email: str = Field(...)
-        firstName: str = Field(...)
-        lastName: str = Field(...)
+        firstName: str = Field(...)  # noqa: N815 GHL API contract
+        lastName: str = Field(...)  # noqa: N815 GHL API contract
         phone: str | None = Field(default=None)
 
     fake_lc_tool = MagicMock()
@@ -251,8 +250,8 @@ def test_mcp_tool_falls_back_to_mcp_input_when_no_args_schema():
     fields the LLM provides aren't silently dropped."""
     from unittest.mock import MagicMock
 
-    from lyra_core.tools.mcp_adapter import McpInput, _make_mcp_tool_adapter
     from lyra_core.tools.base import RiskProfile, TrustTier
+    from lyra_core.tools.mcp_adapter import McpInput, _make_mcp_tool_adapter
 
     fake_lc_tool = MagicMock()
     fake_lc_tool.name = "_regression7_no_schema"
@@ -263,9 +262,7 @@ def test_mcp_tool_falls_back_to_mcp_input_when_no_args_schema():
         lc_tool=fake_lc_tool,
         server_key="ghl",
         mcp_tool_name="_regression7_no_schema",
-        profile=RiskProfile(
-            tier=TrustTier.LOW, reversibility="reversible", blast_radius="single"
-        ),
+        profile=RiskProfile(tier=TrustTier.LOW, reversibility="reversible", blast_radius="single"),
         provider="ghl",
     )
     assert adapter.Input is McpInput

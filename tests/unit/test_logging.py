@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-
 import logging
 from unittest.mock import MagicMock
 
 import structlog
-
 from lyra_core.common import logging as log_mod
 from lyra_core.common.logging import configure_logging, get_logger
 
