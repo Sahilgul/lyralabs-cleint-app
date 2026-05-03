@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # DeepSeek (deepseek-chat = V3, deepseek-reasoner = R1). Cheap + strong.
     deepseek_api_key: str = ""
 
-    llm_primary_model: str = "anthropic/claude-sonnet-4-5"
+    llm_primary_model: str = "deepseek/deepseek-v4-pro"
     llm_cheap_model: str = "gemini/gemini-2.5-flash"
     llm_embedding_model: str = "text-embedding-3-small"
 

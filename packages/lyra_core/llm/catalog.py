@@ -111,6 +111,20 @@ PROVIDERS: dict[str, ProviderSpec] = {
         docs_url="https://api-docs.deepseek.com/",
         known_models=[
             ModelSpec(
+                "deepseek/deepseek-v4-pro",
+                "DeepSeek V4 Pro",
+                1000000,
+                "primary",
+                "Flagship reasoning model with thinking. Best quality.",
+            ),
+            ModelSpec(
+                "deepseek/deepseek-v4-flash",
+                "DeepSeek V4 Flash",
+                1000000,
+                "both",
+                "Fast + cheap V4 variant with thinking.",
+            ),
+            ModelSpec(
                 "deepseek/deepseek-chat",
                 "DeepSeek V3",
                 65536,
