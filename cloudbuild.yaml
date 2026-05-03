@@ -1,0 +1,62 @@
+steps:
+  # Build the image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - build
+      - -t
+      - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:$COMMIT_SHA
+      - -t
+      - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:latest
+      - .
+
+  # Push both tags
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args:
+      - push
+      - --all-tags
+      - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app
+    waitFor: [build]
+
+  # Deploy to Cloud Run (API)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-cloudrun
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - lyralabs-app
+      - --image=us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:$COMMIT_SHA
+      - --region=us-east1
+      - --project=clinicalcopilot
+      - --quiet
+    waitFor: [push]
+
+  # Get the digest and deploy to the VM worker
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-worker
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        DIGEST=$(gcloud artifacts docker images describe \
+          us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:$COMMIT_SHA \
+          --format="value(image_summary.digest)" \
+          --project=clinicalcopilot)
+        SHA=$${DIGEST#sha256:}
+        echo "Deploying SHA: $$SHA to VM worker"
+        gcloud compute ssh lyralabs-worker \
+          --zone=us-east1-b \
+          --project=clinicalcopilot \
+          --tunnel-through-iap \
+          --command="/var/lyralabs/deploy.sh $$SHA" \
+          --ssh-flag="-o StrictHostKeyChecking=no"
+    waitFor: [deploy-cloudrun]
+
+images:
+  - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:$COMMIT_SHA
+  - us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
