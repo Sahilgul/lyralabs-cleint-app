@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     slack_scopes: str = ""
     slack_user_scopes: str = ""
     slack_install_redirect_url: str = ""
+    slack_error_webhook_url: str = ""
     # App-Level Token (xapp-...). Optional. When set, the Socket Mode
     # runner connects via WebSocket and the HTTPS /slack/events endpoint
     # is no longer the primary inbound path. When empty, ARLO falls back
