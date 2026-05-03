@@ -18,6 +18,7 @@ for the catalog of supported providers and known model IDs.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -33,6 +34,53 @@ logger = get_logger(__name__)
 class ModelTier(StrEnum):
     PRIMARY = "primary"
     CHEAP = "cheap"
+
+
+# DeepSeek (and a few other providers) reject tool names that don't match
+# ^[a-zA-Z0-9_-]+$. Our internal tools use dots/slashes in their names
+# (`slack.conversations.history`, `ghl.contacts.search`). We sanitize the
+# names sent to the LLM and reverse-map any tool_calls in the response so
+# the rest of the agent code keeps using the canonical names.
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _sanitize_tool_name(name: str) -> str:
+    return _SAFE_NAME_RE.sub("_", name)
+
+
+def _sanitize_tools(
+    tools: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Return (sanitized_tools, sanitized_to_original_name_map)."""
+    name_map: dict[str, str] = {}
+    sanitized: list[dict[str, Any]] = []
+    for t in tools:
+        fn = t.get("function") or {}
+        original = fn.get("name", "")
+        safe = _sanitize_tool_name(original)
+        if safe != original:
+            t = {**t, "function": {**fn, "name": safe}}
+            name_map[safe] = original
+        sanitized.append(t)
+    return sanitized, name_map
+
+
+def _restore_tool_call_names(response: ModelResponse, name_map: dict[str, str]) -> None:
+    """Mutate response.choices[*].message.tool_calls[*].function.name back to canonical."""
+    if not name_map:
+        return
+    try:
+        for choice in getattr(response, "choices", []) or []:
+            msg = getattr(choice, "message", None)
+            for tc in getattr(msg, "tool_calls", None) or []:
+                fn = getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                current = getattr(fn, "name", None)
+                if current in name_map:
+                    fn.name = name_map[current]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("llm.tool_name_restore_failed", error=str(exc))
 
 
 async def chat(
@@ -74,8 +122,35 @@ async def chat(
         # Don't let extra_config stomp the canonical model/messages args.
         if k not in {"model", "messages"}:
             kwargs[k] = v
+    name_map: dict[str, str] = {}
     if tools:
-        kwargs["tools"] = tools
+        sanitized_tools, name_map = _sanitize_tools(tools)
+        kwargs["tools"] = sanitized_tools
+        if name_map:
+            # If any tool name was sanitized, also rewrite the same names in the
+            # message history (assistant tool_calls + tool result messages) so the
+            # model sees consistent names this turn. We deep-copy so we don't
+            # mutate the caller's state (which keeps the canonical names for
+            # downstream nodes / persistence).
+            original_to_safe = {o: s for s, o in name_map.items()}
+            rewritten: list[dict[str, Any]] = []
+            for m in kwargs["messages"]:
+                m_copy = dict(m)
+                tcs = m_copy.get("tool_calls")
+                if tcs:
+                    new_tcs = []
+                    for tc in tcs:
+                        tc_copy = dict(tc)
+                        fn = dict(tc_copy.get("function") or {})
+                        if fn.get("name") in original_to_safe:
+                            fn["name"] = original_to_safe[fn["name"]]
+                        tc_copy["function"] = fn
+                        new_tcs.append(tc_copy)
+                    m_copy["tool_calls"] = new_tcs
+                if m_copy.get("role") == "tool" and m_copy.get("name") in original_to_safe:
+                    m_copy["name"] = original_to_safe[m_copy["name"]]
+                rewritten.append(m_copy)
+            kwargs["messages"] = rewritten
     if response_format:
         kwargs["response_format"] = response_format
 
@@ -87,7 +162,9 @@ async def chat(
         n_messages=len(messages),
         n_tools=len(tools or []),
     )
-    return await acompletion(**kwargs)
+    response = await acompletion(**kwargs)
+    _restore_tool_call_names(response, name_map)
+    return response
 
 
 def estimate_cost(response: ModelResponse) -> float:
