@@ -223,8 +223,7 @@ def _register_event_handlers(app: AsyncApp) -> None:
         log.info("slack.tokens_revoked", team_id=team_id)
         await _disable_workspace(team_id)
 
-    @app.action("approval")
-    async def on_approval_action(ack: Any, body: dict[str, Any]) -> None:
+    async def _handle_approval_action(ack: Any, body: dict[str, Any]) -> None:
         """User clicked Approve/Reject button on a preview card."""
         await ack()
         from lyra_core.worker.queue import enqueue_resume_agent  # noqa: PLC0415
@@ -235,6 +234,11 @@ def _register_event_handlers(app: AsyncApp) -> None:
         await enqueue_resume_agent(
             job_id=job_id, decision=decision, user_id=body["user"]["id"]
         )
+
+    app.action("approval_approve")(_handle_approval_action)
+    app.action("approval_reject")(_handle_approval_action)
+    # Legacy: keep handling old action_id in case cards were posted before the rename.
+    app.action("approval")(_handle_approval_action)
 
 
 async def _disable_workspace(team_id: str | None) -> None:

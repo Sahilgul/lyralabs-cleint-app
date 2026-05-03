@@ -120,14 +120,14 @@ def _plan_preview_blocks(
                         "style": "primary",
                         "text": {"type": "plain_text", "text": "Approve"},
                         "value": f"approve:{job_id}",
-                        "action_id": "approval",
+                        "action_id": "approval_approve",
                     },
                     {
                         "type": "button",
                         "style": "danger",
                         "text": {"type": "plain_text", "text": "Reject"},
                         "value": f"reject:{job_id}",
-                        "action_id": "approval",
+                        "action_id": "approval_reject",
                     },
                 ],
             }

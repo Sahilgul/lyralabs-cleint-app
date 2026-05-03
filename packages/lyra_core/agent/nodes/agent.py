@@ -98,6 +98,8 @@ For ANY task that creates / updates / sends / books / deletes / pays, call `{sub
 WRITE TOOLS (must go through {submit_plan_tool}):
 {write_tools}
 
+Each step in the plan MUST include the full `args` dict — every parameter the tool needs (IDs, body text, field values). Empty `args: {{}}` is invalid; the step will fail at execution.
+
 Artifact tools (e.g. `artifact.pdf.from_markdown`, `artifact.chart.line`, `artifact.chart.bar`) generate downloadable files without mutating any external system — safe to call directly or include in a plan.
 
 ### Slack tools (use ONLY for Slack-native asks)
@@ -120,7 +122,38 @@ For smalltalk or simple factual questions ("what's today's date?", "thanks!"), r
 
 # Reply style (Slack)
 
-- Slack markdown only: `*bold*`, `_italic_`, `\`code\``, bullets with `•` or `-`. No `#` headers (Slack does not render them).
+Slack uses its own markdown dialect. GitHub/CommonMark does NOT work here.
+
+FORBIDDEN (Slack ignores these):
+- `## Heading` or `### Heading` → use `*Heading*` (bold) on its own line instead
+- `**bold**` → use `*bold*`
+- `| col | col |` tables → use a bulleted list or `key: value` lines instead
+- `---` horizontal rules → omit entirely
+- `[text](url)` links → use `<url|text>` instead
+
+CORRECT Slack markdown:
+- Bold: `*text*`
+- Italic: `_text_`
+- Code: `` `code` ``
+- Bullets: `•` or `-`
+- Links: `<https://example.com|Click here>`
+
+BAD output example:
+```
+## Summary
+**Alex Danner** — no opportunities
+| Field | Value |
+|---|---|
+| Email | x@x.com |
+```
+
+GOOD output example:
+```
+*Summary*
+• *Alex Danner* — no opportunities
+• Email: x@x.com
+```
+
 - Lead with the result. No "Sure!", "I'd be happy to help!", "Got it!" preambles.
 - For lists, show a short bulleted list with the 2-4 fields that matter (name, key identifier, last activity, link/id). Cap at ~10 items unless asked for more — say "showing top N of M" if truncated.
 - For empty results: state what you searched + the filter + the most likely next step.
@@ -216,6 +249,30 @@ def _trim_history(history: list[dict[str, Any]], max_msgs: int) -> list[dict[str
     return history[cut:]
 
 
+def _drop_orphaned_tool_call_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove assistant messages whose tool_calls have no matching tool response.
+
+    Used as a self-healing pass when the LLM returns 400 due to a poisoned
+    checkpoint. Scans the message list and drops any assistant message that
+    has tool_call ids with no corresponding role:tool message following it.
+    """
+    # Build set of all tool_call_ids that have a matching tool response.
+    responded_ids: set[str] = {
+        m["tool_call_id"]
+        for m in messages
+        if m.get("role") == "tool" and "tool_call_id" in m
+    }
+    healed: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            call_ids = {tc["id"] for tc in (msg.get("tool_calls") or [])}
+            if call_ids and not call_ids.issubset(responded_ids):
+                log.warning("agent.healing.dropped_orphan", call_ids=list(call_ids))
+                continue
+        healed.append(msg)
+    return healed
+
+
 def _serialize_assistant_message(msg: Any) -> dict[str, Any]:
     """Convert a LiteLLM assistant message into a plain dict for state.messages."""
     out: dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
@@ -304,13 +361,36 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
         n_tools=len(tool_param_list),
         history_len=len(history),
     ):
-        resp = await chat(
-            tier=ModelTier.PRIMARY,
-            messages=messages,
-            tools=tool_param_list,
-            max_tokens=2000,
-            temperature=0.3,
-        )
+        try:
+            resp = await chat(
+                tier=ModelTier.PRIMARY,
+                messages=messages,
+                tools=tool_param_list,
+                max_tokens=2000,
+                temperature=0.3,
+            )
+        except Exception as exc:
+            # DeepSeek (and some other providers) return 400 when the history
+            # contains an assistant message with tool_calls but no matching
+            # tool response — a "poisoned checkpoint" left by a prior crash.
+            # Detect it, strip the offending assistant messages, and retry once.
+            if "tool_calls" in str(exc) and "tool messages" in str(exc):
+                log.warning(
+                    "agent.llm_call.healing_orphaned_tool_calls",
+                    original_error=str(exc)[:200],
+                )
+                healed = _drop_orphaned_tool_call_messages(messages)
+                resp = await chat(
+                    tier=ModelTier.PRIMARY,
+                    messages=healed,
+                    tools=tool_param_list,
+                    max_tokens=2000,
+                    temperature=0.3,
+                )
+                # Persist the healed history so the checkpoint is fixed.
+                history = [m for m in healed if m.get("role") != "system"]
+            else:
+                raise
     cost = estimate_cost(resp)
     usage = getattr(resp, "usage", None)
     log.info(
@@ -331,7 +411,7 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
     tool_calls = serialized.get("tool_calls") or []
 
     # Case 1: agent submitted a plan -> route to approval.
-    plan_args, _ = _extract_submit_plan_call(tool_calls)
+    plan_args, plan_call_id = _extract_submit_plan_call(tool_calls)
     if plan_args is not None:
         try:
             plan = Plan.model_validate(plan_args)
@@ -349,7 +429,18 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
                     },
                 ],
             }
-        return {**base_update, "pending_plan": plan.model_dump()}
+        # Close the tool_call loop immediately so history is always valid.
+        # Without this, a reject followed by a new user message produces an
+        # assistant message with tool_calls but no tool response → DeepSeek 400.
+        closed_history = [
+            *new_history,
+            {
+                "role": "tool",
+                "tool_call_id": plan_call_id,
+                "content": "Plan submitted for approval.",
+            },
+        ]
+        return {**base_update, "messages": closed_history, "pending_plan": plan.model_dump()}
 
     # Case 2: agent called a read tool -> route to tool_node loop.
     if tool_calls:

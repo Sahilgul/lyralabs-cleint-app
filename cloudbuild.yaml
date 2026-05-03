@@ -50,7 +50,7 @@ steps:
           --zone=us-east1-b \
           --project=clinicalcopilot \
           --tunnel-through-iap \
-          --command="/var/lyralabs/deploy.sh $$SHA" \
+          --command="sh /var/lyralabs/deploy.sh $$SHA" \
           --ssh-flag="-o StrictHostKeyChecking=no"
     waitFor: [deploy-cloudrun]
 

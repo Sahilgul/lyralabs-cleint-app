@@ -1,0 +1,134 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Notify Slack — deployment started
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "🚀 *Deployment started*",
+              "attachments": [{
+                "color": "#439FE0",
+                "fields": [
+                  { "title": "Triggered by", "value": "${{ github.actor }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
+                  { "title": "Commit", "value": "<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
+
+      - name: Build & push image
+        run: |
+          IMAGE="us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app"
+          docker build \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            .
+          docker push --all-tags $IMAGE
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE:${{ github.sha }} | grep -o 'sha256:[a-f0-9]*')
+          echo "IMAGE_DIGEST=$DIGEST" >> $GITHUB_ENV
+
+      - name: Notify Slack — build complete
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "🐳 *Build complete* — image pushed to Artifact Registry",
+              "attachments": [{
+                "color": "#439FE0",
+                "fields": [
+                  { "title": "Digest", "value": "${{ env.IMAGE_DIGEST }}", "short": false }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="us-east1-docker.pkg.dev/clinicalcopilot/cloud-run-source-deploy/lyralabs-cleint-app/lyralabs-app"
+          gcloud run deploy lyralabs-app \
+            --image=$IMAGE:${{ github.sha }} \
+            --region=us-east1 \
+            --project=clinicalcopilot \
+            --quiet
+
+      - name: Deploy to VM worker
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          script: |
+            SHA=$(echo "${{ env.IMAGE_DIGEST }}" | sed 's/sha256://')
+            sh ~/lyralabs/deploy.sh $SHA
+
+      - name: Notify Slack — deployed successfully
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "✅ *Deployed successfully* — Cloud Run + VM worker updated",
+              "attachments": [{
+                "color": "good",
+                "fields": [
+                  { "title": "Triggered by", "value": "${{ github.actor }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
+                  { "title": "Commit", "value": "<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" },
+                  { "title": "Logs", "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>" }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — deployment failed
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "❌ *Deployment failed*",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  { "title": "Triggered by", "value": "${{ github.actor }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
+                  { "title": "Commit", "value": "<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" },
+                  { "title": "Logs", "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>" }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

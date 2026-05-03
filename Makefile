@@ -1,4 +1,4 @@
-.PHONY: help gen-key dev dev-api dev-worker dev-redis migrate test test-watch test-coverage lint type fmt clean
+.PHONY: help gen-key dev dev-api dev-worker dev-redis migrate test test-regression test-watch test-coverage lint type fmt clean
 
 help:
 	@echo "Docker dev:    dev"
@@ -33,7 +33,10 @@ migrate:
 	PYTHONPATH=packages:. .venv/bin/alembic upgrade head
 
 test:
-	APP_ENV=test PYTHONPATH=packages:. pytest tests/unit -q
+	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/unit -q
+
+test-regression:
+	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/regression/regression_test1.py tests/regression/regression_test2.py tests/regression/regression_test3.py -v
 
 test-watch:
 	APP_ENV=test PYTHONPATH=packages:. pytest tests/unit -q --tb=short --maxfail=1 -x
