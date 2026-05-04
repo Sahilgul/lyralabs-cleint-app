@@ -45,7 +45,8 @@ from .catalog import PROVIDERS, ModelSpec, ProviderSpec, model_spec, provider_fo
 
 log = get_logger(__name__)
 
-Tier = Literal["primary", "cheap", "embedding"]
+Tier = Literal["primary", "critic", "cheap", "embedding"]
+Quality = Literal["pro", "flash"]
 
 _CACHE_TTL_SECONDS = 30.0
 
@@ -143,6 +144,8 @@ def _resolve_from_env(tier: Tier) -> ResolvedModel:
     settings = get_settings()
     if tier == "primary":
         model_id = settings.llm_primary_model
+    elif tier == "critic":
+        model_id = settings.llm_critic_model
     elif tier == "cheap":
         model_id = settings.llm_cheap_model
     else:  # embedding
@@ -171,6 +174,8 @@ def _env_api_key_for(spec: ProviderSpec) -> str | None:
         "openai": settings.openai_api_key or None,
         "anthropic": settings.anthropic_api_key or None,
         "gemini": settings.google_api_key or None,
+        "minimax": settings.minimax_api_key or None,
+        "moonshot": settings.kimi_api_key or None,
     }.get(spec.key)
 
 
@@ -316,3 +321,64 @@ async def test_provider_connection(
 def known_model_for(model_id: str) -> ModelSpec | None:
     """Re-export from catalog for admin endpoint convenience."""
     return model_spec(model_id)
+
+
+def build_env_fallback_chain(quality: Quality) -> list[ResolvedModel]:
+    """Build the ordered [Primary, Secondary, Tertiary] list for a quality level.
+
+    Each entry is resolved purely from env-var settings (no DB query).
+    Models whose provider has no API key configured are silently skipped so the
+    chain is always as short as the number of *configured* providers — avoiding
+    guaranteed auth failures mid-chain.
+
+    The caller (``chat_with_fallback``) iterates the list and stops as soon as
+    one succeeds.
+    """
+    settings = get_settings()
+
+    if quality == "pro":
+        model_ids = [
+            settings.llm_primary_pro,
+            settings.llm_secondary_pro,
+            settings.llm_tertiary_pro,
+        ]
+    else:
+        model_ids = [
+            settings.llm_primary_flash,
+            settings.llm_secondary_flash,
+            settings.llm_tertiary_flash,
+        ]
+
+    chain: list[ResolvedModel] = []
+    for model_id in model_ids:
+        spec = provider_for_model(model_id)
+        api_key = _env_api_key_for(spec) if spec else None
+
+        if spec and spec.requires_api_key and not api_key:
+            log.debug(
+                "llm.fallback_chain.skip_no_key",
+                model=model_id,
+                provider=spec.key,
+            )
+            continue
+
+        chain.append(
+            ResolvedModel(
+                tier=f"env_{quality}",
+                provider_key=spec.key if spec else "unknown",
+                model_id=model_id,
+                api_key=api_key,
+                api_base=spec.default_api_base if spec else None,
+                source="env",
+            )
+        )
+
+    if not chain:
+        log.warning(
+            "llm.fallback_chain.empty",
+            quality=quality,
+            model_ids=model_ids,
+            hint="Set DEEPSEEK_API_KEY / MINIMAX_API_KEY / KIMI_API_KEY in env.",
+        )
+
+    return chain

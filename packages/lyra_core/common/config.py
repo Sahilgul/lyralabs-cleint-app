@@ -48,10 +48,26 @@ class Settings(BaseSettings):
     qwen_api_base: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     # DeepSeek (deepseek-chat = V3, deepseek-reasoner = R1). Cheap + strong.
     deepseek_api_key: str = ""
+    # MiniMax (OpenAI-compatible endpoint at api.minimax.io).
+    minimax_api_key: str = ""
+    # Kimi / Moonshot AI (OpenAI-compatible endpoint at api.moonshot.ai).
+    kimi_api_key: str = ""
 
     llm_primary_model: str = "deepseek/deepseek-v4-pro"
+    llm_critic_model: str = "openai/MiniMax-M2.7"   # final user-facing summary writer
     llm_cheap_model: str = "gemini/gemini-2.5-flash"
     llm_embedding_model: str = "text-embedding-3-small"
+
+    # Three-tier fallback chain — Pro quality (planning / reasoning / critic).
+    # Tried in order: Primary → Secondary → Tertiary.
+    llm_primary_pro: str = "deepseek/deepseek-v4-pro"
+    llm_secondary_pro: str = "openai/MiniMax-M2.7"
+    llm_tertiary_pro: str = "openai/kimi-k2.6"
+
+    # Three-tier fallback chain — Flash quality (fast helper calls).
+    llm_primary_flash: str = "deepseek/deepseek-v4-flash"
+    llm_secondary_flash: str = "openai/MiniMax-M2.5"
+    llm_tertiary_flash: str = "openai/kimi-k2.5"
 
     # Slack
     slack_client_id: str = ""
@@ -82,6 +98,11 @@ class Settings(BaseSettings):
     ghl_client_secret: str = ""
     ghl_redirect_uri: str = ""
     ghl_scopes: str = ""
+    # GHL eval-only credentials (Private Integration Token, no DB / OAuth needed).
+    # Used exclusively by tests/eval/test_arlo_ghl_live.py.
+    # Get from: GHL sub-account → Settings → Business Info → Private Integrations.
+    ghl_eval_token: str = ""
+    ghl_eval_location_id: str = ""
 
     # Stripe
     stripe_secret_key: str = ""

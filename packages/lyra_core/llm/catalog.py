@@ -224,11 +224,25 @@ PROVIDERS: dict[str, ProviderSpec] = {
         docs_url="https://platform.moonshot.ai/docs/api-reference",
         known_models=[
             ModelSpec(
+                "openai/kimi-k2.6",
+                "Kimi K2.6",
+                256000,
+                "primary",
+                "Tertiary Pro fallback. Strong reasoning, higher price.",
+            ),
+            ModelSpec(
+                "openai/kimi-k2.5",
+                "Kimi K2.5",
+                256000,
+                "cheap",
+                "Tertiary Flash fallback. Cheaper Kimi variant.",
+            ),
+            ModelSpec(
                 "openai/kimi-k2-0905-preview",
                 "Kimi K2 (preview)",
                 256000,
                 "primary",
-                "Latest K2 release. Use OpenAI-compatible endpoint.",
+                "Preview K2 release. Use OpenAI-compatible endpoint.",
             ),
             ModelSpec(
                 "openai/moonshot-v1-128k",
@@ -246,6 +260,20 @@ PROVIDERS: dict[str, ProviderSpec] = {
         default_api_base="https://api.minimax.io/v1",
         docs_url="https://www.minimax.io/platform/document/ChatCompletion%20v2",
         known_models=[
+            ModelSpec(
+                "openai/MiniMax-M2.7",
+                "MiniMax M2.7",
+                204800,
+                "primary",
+                "Secondary Pro fallback. Agent-grade, strong reasoning.",
+            ),
+            ModelSpec(
+                "openai/MiniMax-M2.5",
+                "MiniMax M2.5",
+                204800,
+                "cheap",
+                "Secondary Flash fallback. Fast + cheap variant.",
+            ),
             ModelSpec(
                 "openai/MiniMax-M2",
                 "MiniMax M2",
