@@ -34,7 +34,6 @@ from lyra_core.db.session import async_session
 
 # Importing tools triggers registration in the global registry.
 from lyra_core.tools import artifacts as _artifacts  # noqa: F401
-from lyra_core.tools import ghl as _ghl  # noqa: F401
 from lyra_core.tools import google as _google  # noqa: F401
 from lyra_core.tools import meta_tools as _meta_tools  # noqa: F401
 from lyra_core.tools import slack as _slack  # noqa: F401

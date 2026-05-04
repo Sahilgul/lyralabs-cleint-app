@@ -41,7 +41,6 @@ sys.path.insert(0, ROOT)
 # self-register at import time. Without this, tests that rely on the registry
 # would only see whatever was imported transitively.
 import lyra_core.tools.artifacts  # noqa: E402
-import lyra_core.tools.ghl  # noqa: E402
 import lyra_core.tools.google  # noqa: E402, F401
 import pytest  # noqa: E402
 

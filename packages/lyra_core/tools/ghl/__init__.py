@@ -1,17 +1,1 @@
-"""GoHighLevel tools.
-
-Importing this module registers all GHL tools on the default registry.
-"""
-
-from .calendars import GhlBookAppointment
-from .contacts import GhlContactsCreate, GhlContactsSearch
-from .conversations import GhlSendMessage
-from .pipelines import GhlPipelineOpportunities
-
-__all__ = [
-    "GhlBookAppointment",
-    "GhlContactsCreate",
-    "GhlContactsSearch",
-    "GhlPipelineOpportunities",
-    "GhlSendMessage",
-]
+"""GoHighLevel tools — served via MCP discovery (mcp_registry.py)."""

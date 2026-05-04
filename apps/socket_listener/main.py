@@ -41,7 +41,6 @@ from lyra_core.common.logging import configure_logging, get_logger
 # them on its own; doing it here as well costs nothing and keeps the
 # socket listener self-contained.
 from lyra_core.tools import artifacts as _artifacts  # noqa: F401
-from lyra_core.tools import ghl as _ghl  # noqa: F401
 from lyra_core.tools import google as _google  # noqa: F401
 from lyra_core.tools import slack as _slack  # noqa: F401
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler

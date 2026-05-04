@@ -114,19 +114,6 @@ class TestDefaultRegistry:
         ):
             assert n in names
 
-    def test_ghl_registered_on_import(self) -> None:
-        from lyra_core.tools import ghl as _g  # noqa: F401
-
-        names = {t.name for t in default_registry.by_provider("ghl")}
-        for n in (
-            "ghl.contacts.search",
-            "ghl.contacts.create",
-            "ghl.pipelines.opportunities",
-            "ghl.conversations.send_message",
-            "ghl.calendars.book_appointment",
-        ):
-            assert n in names
-
     def test_artifacts_registered_on_import(self) -> None:
         from lyra_core.tools import artifacts as _a  # noqa: F401
 
@@ -139,26 +126,21 @@ class TestDefaultRegistry:
             assert n in names
 
     def test_write_tools_marked_for_approval(self) -> None:
-        from lyra_core.tools import artifacts, ghl, google  # noqa: F401
+        from lyra_core.tools import artifacts, google  # noqa: F401
 
         for n in [
             "google.docs.create",
             "google.sheets.append",
             "google.calendar.create_event",
-            "ghl.contacts.create",
-            "ghl.conversations.send_message",
-            "ghl.calendars.book_appointment",
         ]:
             assert default_registry.get(n).requires_approval, n
 
     def test_read_tools_not_marked_for_approval(self) -> None:
-        from lyra_core.tools import ghl, google  # noqa: F401
+        from lyra_core.tools import google  # noqa: F401
 
         for n in [
             "google.drive.search",
             "google.drive.read",
             "google.sheets.read",
-            "ghl.contacts.search",
-            "ghl.pipelines.opportunities",
         ]:
             assert default_registry.get(n).requires_approval is False, n
