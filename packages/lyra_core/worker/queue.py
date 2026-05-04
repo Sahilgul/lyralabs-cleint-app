@@ -55,3 +55,27 @@ async def enqueue_resume_agent(*, job_id: str, decision: str, user_id: str) -> N
         decision=decision,
         user_id=user_id,
     )
+
+
+# TTL for tracking which channel threads the bot has participated in.
+# After this window, follow-up messages without @-mention are ignored.
+_ACTIVE_THREAD_TTL = 7 * 24 * 3600  # 7 days
+
+
+async def mark_thread_active(team_id: str, channel_id: str, thread_ts: str) -> None:
+    """Record that the bot has entered a channel thread.
+
+    Called by the Slack adapter whenever it processes any channel message
+    (mention or follow-up). Subsequent messages in the thread trigger the
+    bot without requiring an @-mention each time.
+    """
+    pool = await _get_pool()
+    key = f"arlo:active_thread:{team_id}:{channel_id}:{thread_ts}"
+    await pool.set(key, "1", ex=_ACTIVE_THREAD_TTL)
+
+
+async def is_thread_active(team_id: str, channel_id: str, thread_ts: str) -> bool:
+    """Return True if the bot has previously entered this channel thread."""
+    pool = await _get_pool()
+    key = f"arlo:active_thread:{team_id}:{channel_id}:{thread_ts}"
+    return bool(await pool.exists(key))

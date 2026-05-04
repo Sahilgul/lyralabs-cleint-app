@@ -72,12 +72,10 @@ MCP_SERVER_CONFIGS: dict[str, McpServerConfig] = {
             }
         ),
     ),
-    "slack": McpServerConfig(
-        url="https://mcp.slack.com/mcp",
-        transport="http",
-        provider="slack",
-        write_tools=frozenset({"send_message", "create_canvas", "update_canvas"}),
-    ),
+    # Slack tools live in-process under tools/slack/* — see ADR / slack/__init__.py
+    # for why we don't use mcp.slack.com (we run inside Slack already, with
+    # bot+user tokens loaded; an MCP hop adds latency, an external dependency,
+    # and breaks our typed SlackTokenMissing UX). Don't add a Slack entry here.
 }
 
 

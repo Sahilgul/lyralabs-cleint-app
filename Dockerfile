@@ -1,6 +1,7 @@
-# Single image for both Lyralabs services. Same code, different runtime command:
-#   - lyralabs-api    -> default CMD (uvicorn FastAPI on $PORT)
-#   - lyralabs-worker -> override CMD to: celery -A apps.worker.celery_app:celery worker
+# Single image for all three Lyralabs services. Same code, different runtime command:
+#   - lyralabs-app             -> default CMD (uvicorn FastAPI on $PORT)
+#   - lyralabs-worker          -> override CMD to: python -m arq apps.worker.arq_app.WorkerSettings
+#   - lyralabs-socket-listener -> override CMD to: python -m apps.socket_listener.main
 #
 # Cloud Run sets the command via "Container command" / "Container arguments"
 # fields in the wizard. docker-compose sets it via the `command:` key.

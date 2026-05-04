@@ -33,3 +33,6 @@ Thumbs.db
 # Build
 dist/
 build/
+
+# Eval logs (large JSON outputs from make eval-arlo)
+logs/
