@@ -51,9 +51,7 @@ class BookmarksAdd(Tool[BookmarksAddInput, BookmarksAddOutput]):
     Input = BookmarksAddInput
     Output = BookmarksAddOutput
 
-    async def run(
-        self, ctx: ToolContext, args: BookmarksAddInput
-    ) -> BookmarksAddOutput:
+    async def run(self, ctx: ToolContext, args: BookmarksAddInput) -> BookmarksAddOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:

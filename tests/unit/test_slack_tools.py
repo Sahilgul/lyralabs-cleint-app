@@ -370,9 +370,7 @@ async def test_users_lookup_by_email_returns_found_false_on_missing(monkeypatch)
     err_resp = MagicMock()
     err_resp.data = {"error": "users_not_found"}
     fake_client = MagicMock()
-    fake_client.users_lookupByEmail = AsyncMock(
-        side_effect=SlackApiError("nf", response=err_resp)
-    )
+    fake_client.users_lookupByEmail = AsyncMock(side_effect=SlackApiError("nf", response=err_resp))
 
     with patch("lyra_core.tools.slack.users.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.users.lookup_by_email")
@@ -415,9 +413,7 @@ async def test_conversations_open_returns_channel_id(monkeypatch) -> None:
     fake_client = MagicMock()
     fake_client.conversations_open = AsyncMock(return_value=fake_resp)
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.open")
         out = await tool.run(_ctx(), tool.Input(user_ids=["U1", "U2"]))
 
@@ -447,9 +443,7 @@ async def test_conversations_list_filters_by_name_clientside(monkeypatch) -> Non
     fake_client = MagicMock()
     fake_client.conversations_list = AsyncMock(return_value=fake_resp)
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.list")
         out = await tool.run(_ctx(), tool.Input(name_filter="design"))
 
@@ -474,9 +468,7 @@ async def test_conversations_info_returns_topic_purpose(monkeypatch) -> None:
     fake_client = MagicMock()
     fake_client.conversations_info = AsyncMock(return_value=fake_resp)
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.info")
         out = await tool.run(_ctx(), tool.Input(channel_id="C1"))
 
@@ -640,13 +632,9 @@ async def test_conversations_invite_passes_csv_user_ids(monkeypatch) -> None:
     fake_client = MagicMock()
     fake_client.conversations_invite = AsyncMock(return_value=MagicMock(data={"ok": True}))
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.invite")
-        out = await tool.run(
-            _ctx(), tool.Input(channel_id="C-1", user_ids=["U1", "U2", "U3"])
-        )
+        out = await tool.run(_ctx(), tool.Input(channel_id="C-1", user_ids=["U1", "U2", "U3"]))
 
     kw = fake_client.conversations_invite.await_args.kwargs
     assert kw["users"] == "U1,U2,U3"
@@ -668,13 +656,9 @@ async def test_conversations_create_returns_new_channel(monkeypatch) -> None:
     fake_client = MagicMock()
     fake_client.conversations_create = AsyncMock(return_value=fake_resp)
 
-    with patch(
-        "lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client
-    ):
+    with patch("lyra_core.tools.slack.conversations.AsyncWebClient", return_value=fake_client):
         tool = default_registry.get("slack.conversations.create")
-        out = await tool.run(
-            _ctx(), tool.Input(name="project-atlas", is_private=False)
-        )
+        out = await tool.run(_ctx(), tool.Input(name="project-atlas", is_private=False))
 
     assert out.channel.id == "C-NEW"
     assert out.channel.name == "project-atlas"

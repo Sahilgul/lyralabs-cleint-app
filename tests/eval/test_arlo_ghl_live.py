@@ -1,4 +1,4 @@
-"""ARLO × GHL Live Eval — real MCP tool calls, real GoHighLevel data.
+"""ARLO x GHL Live Eval — real MCP tool calls, real GoHighLevel data.
 
 Unlike `test_arlo_eval.py` (which uses hardcoded mock schemas), this eval:
 
@@ -41,13 +41,12 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.llm import _call_resolved, estimate_cost
 from lyra_core.llm.router import ResolvedModel
@@ -56,7 +55,7 @@ from lyra_core.llm.router import ResolvedModel
 # Log directory
 # ---------------------------------------------------------------------------
 
-_RUN_TS = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+_RUN_TS = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
 _LOG_ROOT = Path(__file__).parent.parent.parent / "logs" / f"arlo-ghl-live-{_RUN_TS}"
 
 # GHL MCP endpoint
@@ -106,32 +105,34 @@ _SUBMIT_PLAN_SCHEMA: dict[str, Any] = {
 # System prompt — matches production ARLO agent prompt closely
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = "\n".join([
-    "You are ARLO — a senior operations coworker for a marketing agency that runs on GoHighLevel.",
-    "You live in Slack. The team relies on you to run real work in their CRM, calendars, and comms.",
-    "",
-    "# Voice — friendly but professional",
-    "Sound like a senior ops teammate: good at the job, respects their time. Not chatty, not robotic.",
-    "Lead with the result. No 'Sure!', 'I'd be happy to help!', or 'Hope this helps!' preambles.",
-    "Use Slack markdown: *bold*, _italic_, `code`. No ## headings, no **bold**, no | table | pipes |.",
-    "Be specific: real names, counts, dollar amounts, IDs. Never 'several' when you can say '12 contacts'.",
-    "",
-    "# Tool discipline",
-    "You have READ tools (call freely) and WRITE tools (require approval).",
-    "For ANY task that creates / updates / sends / books / deletes: call submit_plan_for_approval.",
-    "For smalltalk or simple factual questions (date, thanks, etc.): reply directly, no tools.",
-    "",
-    "# Workflow",
-    "1. If unsure of the right tool → call discover_tools(intent='...').",
-    "2. Read what you need. If empty results, try a broader filter before reporting 'none found'.",
-    "3. Writes → bundle all write steps into one submit_plan_for_approval call.",
-    "4. Reply. Lead with the answer. One proactive next step if useful.",
-    "",
-    "Workspace: Apex Marketing Agency. Pipeline stages: Lead → Contacted → Proposal Sent → Negotiation → Won.",
-    "Timezone: America/New_York.",
-    "",
-    "Be the coworker they brag about.",
-])
+_SYSTEM_PROMPT = "\n".join(
+    [
+        "You are ARLO — a senior operations coworker for a marketing agency that runs on GoHighLevel.",
+        "You live in Slack. The team relies on you to run real work in their CRM, calendars, and comms.",
+        "",
+        "# Voice — friendly but professional",
+        "Sound like a senior ops teammate: good at the job, respects their time. Not chatty, not robotic.",
+        "Lead with the result. No 'Sure!', 'I'd be happy to help!', or 'Hope this helps!' preambles.",
+        "Use Slack markdown: *bold*, _italic_, `code`. No ## headings, no **bold**, no | table | pipes |.",
+        "Be specific: real names, counts, dollar amounts, IDs. Never 'several' when you can say '12 contacts'.",
+        "",
+        "# Tool discipline",
+        "You have READ tools (call freely) and WRITE tools (require approval).",
+        "For ANY task that creates / updates / sends / books / deletes: call submit_plan_for_approval.",
+        "For smalltalk or simple factual questions (date, thanks, etc.): reply directly, no tools.",
+        "",
+        "# Workflow",
+        "1. If unsure of the right tool → call discover_tools(intent='...').",
+        "2. Read what you need. If empty results, try a broader filter before reporting 'none found'.",
+        "3. Writes → bundle all write steps into one submit_plan_for_approval call.",
+        "4. Reply. Lead with the answer. One proactive next step if useful.",
+        "",
+        "Workspace: Apex Marketing Agency. Pipeline stages: Lead → Contacted → Proposal Sent → Negotiation → Won.",
+        "Timezone: America/New_York.",
+        "",
+        "Be the coworker they brag about.",
+    ]
+)
 
 # ---------------------------------------------------------------------------
 # Test cases — realistic ARLO requests exercising real GHL MCP tools
@@ -141,9 +142,9 @@ _SYSTEM_PROMPT = "\n".join([
 @dataclass(frozen=True)
 class GhlEvalCase:
     case_id: str
-    category: str           # ghl-read | ghl-write | multi-turn
+    category: str  # ghl-read | ghl-write | multi-turn
     user_request: str
-    expected_routing: str   # "read_tool" | "plan" | "direct"
+    expected_routing: str  # "read_tool" | "plan" | "direct"
     notes: str = ""
 
 
@@ -466,7 +467,8 @@ def _score_result(
         # Check if any word from tool results (>4 chars, not numbers) appears in reply.
         all_tool_content = " ".join(tool_results_text).lower()
         tool_words = {
-            w for w in re.findall(r"[a-zA-Z]{5,}", all_tool_content)
+            w
+            for w in re.findall(r"[a-zA-Z]{5,}", all_tool_content)
             if w not in {"false", "title", "phone", "email", "first", "contact", "fields", "value"}
         }
         reply_lower = final_text.lower()
@@ -487,7 +489,7 @@ def _score_result(
 
 
 # ---------------------------------------------------------------------------
-# Main eval loop — one (model × case)
+# Main eval loop — one (model x case)
 # ---------------------------------------------------------------------------
 
 
@@ -655,7 +657,11 @@ async def _eval_one(
                     # After submitting a plan, the loop is done — model replies with summary
                 else:
                     # Real GHL MCP execution
-                    print(f"      [GHL] {tool_name}({json.dumps(args, default=str)[:80]}) ...", end="", flush=True)
+                    print(
+                        f"      [GHL] {tool_name}({json.dumps(args, default=str)[:80]}) ...",
+                        end="",
+                        flush=True,
+                    )
                     tool_result_str = await _execute_ghl_tool(
                         tool_name, args, lc_tools, ghl_token, ghl_location_id
                     )
@@ -697,7 +703,9 @@ async def _eval_one(
     result.tool_results = [r[:500] for r in tool_results_for_scoring]  # truncate for logs
 
     if not result.error:
-        scores = _score_result(case, all_tool_calls, result.final_response, tool_results_for_scoring)
+        scores = _score_result(
+            case, all_tool_calls, result.final_response, tool_results_for_scoring
+        )
         result.routing_ok = bool(scores["routing_ok"])
         result.args_ok = bool(scores["args_ok"])
         result.grounded = bool(scores["grounded"])
@@ -737,18 +745,13 @@ def _write_case_log(result: LiveEvalResult) -> None:
         },
         "trace": {
             "tool_calls_made": [
-                {"name": tc["name"], "args": tc["arguments"][:300]}
-                for tc in result.tool_calls_made
+                {"name": tc["name"], "args": tc["arguments"][:300]} for tc in result.tool_calls_made
             ],
             "plan_steps": result.plan_steps,
             "ghl_results_snippets": result.tool_results,
             "final_response": result.final_response,
         },
-        "status": (
-            "skipped" if result.skipped
-            else "error" if result.error
-            else "ok"
-        ),
+        "status": ("skipped" if result.skipped else "error" if result.error else "ok"),
         "error": result.error,
     }
     path.write_text(json.dumps(payload, indent=2))
@@ -762,9 +765,16 @@ def _write_summary(all_results: list[LiveEvalResult], ghl_tool_names: list[str])
         if r.model_label not in per_model:
             per_model[r.model_label] = {
                 "model_id": r.model_id,
-                "n": 0, "skipped": 0, "errors": 0,
-                "routing_ok": 0, "args_ok": 0, "grounded": 0, "voice_ok": 0,
-                "lat": 0.0, "cost": 0.0, "tokens": 0,
+                "n": 0,
+                "skipped": 0,
+                "errors": 0,
+                "routing_ok": 0,
+                "args_ok": 0,
+                "grounded": 0,
+                "voice_ok": 0,
+                "lat": 0.0,
+                "cost": 0.0,
+                "tokens": 0,
             }
         m = per_model[r.model_label]
         if r.skipped:
@@ -818,7 +828,7 @@ def _write_summary(all_results: list[LiveEvalResult], ghl_tool_names: list[str])
 
 @pytest.mark.live
 async def test_arlo_ghl_live_all() -> None:
-    """Run all models × all cases with real GHL MCP tool calls.
+    """Run all models x all cases with real GHL MCP tool calls.
 
     Requires GHL_EVAL_TOKEN and GHL_EVAL_LOCATION_ID in .env.
     Skips individual models whose LLM API key is missing.
@@ -834,7 +844,7 @@ async def test_arlo_ghl_live_all() -> None:
 
     # --- Fetch real GHL schemas once (shared across all models) ---
     print(f"\n{'=' * 80}")
-    print("  ARLO × GHL LIVE EVAL — fetching real MCP schemas ...")
+    print("  ARLO x GHL LIVE EVAL — fetching real MCP schemas ...")
     print(f"  GHL MCP: {_GHL_MCP_URL}")
     lc_tools, ghl_schemas = await _fetch_ghl_schemas(s.ghl_eval_token, s.ghl_eval_location_id)
     # Exclude submit_plan_for_approval from the tool names list (it's ours, not GHL's)
@@ -843,7 +853,9 @@ async def test_arlo_ghl_live_all() -> None:
         for sc in ghl_schemas
         if sc["function"]["name"] != "submit_plan_for_approval"
     ]
-    print(f"  Discovered {len(ghl_tool_names)} GHL tools: {', '.join(ghl_tool_names[:10])}{'...' if len(ghl_tool_names) > 10 else ''}")
+    print(
+        f"  Discovered {len(ghl_tool_names)} GHL tools: {', '.join(ghl_tool_names[:10])}{'...' if len(ghl_tool_names) > 10 else ''}"
+    )
     print(f"  Log dir: {_LOG_ROOT}")
     print(f"{'=' * 80}\n")
 
@@ -870,12 +882,18 @@ async def test_arlo_ghl_live_all() -> None:
         print(f"\n  ── {model.label} ({model.model_id}) ──")
         for case in _CASES:
             print(f"    [{case.category}] {case.case_id}")
-            print(f"      Q: {case.user_request[:80]}{'...' if len(case.user_request) > 80 else ''}")
+            print(
+                f"      Q: {case.user_request[:80]}{'...' if len(case.user_request) > 80 else ''}"
+            )
 
             r = await _eval_one(
-                model, case, api_key,
-                lc_tools, ghl_schemas,
-                s.ghl_eval_token, s.ghl_eval_location_id,
+                model,
+                case,
+                api_key,
+                lc_tools,
+                ghl_schemas,
+                s.ghl_eval_token,
+                s.ghl_eval_location_id,
             )
             all_results.append(r)
             _write_case_log(r)
@@ -888,7 +906,9 @@ async def test_arlo_ghl_live_all() -> None:
                     f"grounded={'✓' if r.grounded else '✗'} "
                     f"voice={'✓' if r.voice_ok else '✗'}"
                 )
-                print(f"      {scores}  {r.latency_s:.1f}s  ${r.total_cost_usd:.5f}  turns={r.turns}")
+                print(
+                    f"      {scores}  {r.latency_s:.1f}s  ${r.total_cost_usd:.5f}  turns={r.turns}"
+                )
                 if r.final_response:
                     snip = r.final_response[:120].replace("\n", " ")
                     print(f"      reply: {snip}")
@@ -898,7 +918,9 @@ async def test_arlo_ghl_live_all() -> None:
     print("  SUMMARY BY MODEL")
     print(f"{'=' * 80}")
     hdr = "{:<22} {:>6} {:>10} {:>10} {:>10} {:>10} {:>12}"
-    print(hdr.format("Model", "Cases", "Routing %", "Grounded%", "Voice %", "Avg Lat", "Total Cost"))
+    print(
+        hdr.format("Model", "Cases", "Routing %", "Grounded%", "Voice %", "Avg Lat", "Total Cost")
+    )
     print("-" * 80)
 
     per: dict[str, list[LiveEvalResult]] = {}
@@ -917,11 +939,17 @@ async def test_arlo_ghl_live_all() -> None:
         voice_pct = sum(r.voice_ok for r in active) / n * 100
         avg_lat = sum(r.latency_s for r in active) / n
         total_cost = sum(r.total_cost_usd for r in active)
-        print(hdr.format(
-            label, n,
-            f"{routing_pct:.0f}%", f"{grounded_pct:.0f}%", f"{voice_pct:.0f}%",
-            f"{avg_lat:.1f}s", f"${total_cost:.4f}",
-        ))
+        print(
+            hdr.format(
+                label,
+                n,
+                f"{routing_pct:.0f}%",
+                f"{grounded_pct:.0f}%",
+                f"{voice_pct:.0f}%",
+                f"{avg_lat:.1f}s",
+                f"${total_cost:.4f}",
+            )
+        )
     print(f"{'=' * 80}")
     print(f"  Full logs → {_LOG_ROOT}\n")
 
@@ -960,10 +988,11 @@ async def test_arlo_ghl_live_model(model: _ModelSpec) -> None:
     if api_key is None:
         pytest.skip(f"no {model.env_key} configured.")
 
-    print(f"\nFetching GHL schemas ...")
+    print("\nFetching GHL schemas ...")
     lc_tools, ghl_schemas = await _fetch_ghl_schemas(s.ghl_eval_token, s.ghl_eval_location_id)
     ghl_tool_names = [
-        sc["function"]["name"] for sc in ghl_schemas
+        sc["function"]["name"]
+        for sc in ghl_schemas
         if sc["function"]["name"] != "submit_plan_for_approval"
     ]
     print(f"Discovered {len(ghl_tool_names)} GHL tools")
@@ -976,9 +1005,13 @@ async def test_arlo_ghl_live_model(model: _ModelSpec) -> None:
         print(f"\n  [{case.category}] {case.case_id}")
         print(f"  Q: {case.user_request}")
         r = await _eval_one(
-            model, case, api_key,
-            lc_tools, ghl_schemas,
-            s.ghl_eval_token, s.ghl_eval_location_id,
+            model,
+            case,
+            api_key,
+            lc_tools,
+            ghl_schemas,
+            s.ghl_eval_token,
+            s.ghl_eval_location_id,
         )
         results.append(r)
         _write_case_log(r)
@@ -997,7 +1030,9 @@ async def test_arlo_ghl_live_model(model: _ModelSpec) -> None:
                     print(f"  → {tc['name']}({args_preview})")
             if r.plan_steps:
                 for step in r.plan_steps:
-                    print(f"  → plan: {step.get('tool_name')}  args={json.dumps(step.get('args', {}))[:80]}")
+                    print(
+                        f"  → plan: {step.get('tool_name')}  args={json.dumps(step.get('args', {}))[:80]}"
+                    )
             if r.final_response:
                 print(f"  ARLO: {r.final_response[:200]}")
 

@@ -31,11 +31,10 @@ Skip live tests in CI:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.llm import _call_resolved, estimate_cost
 from lyra_core.llm.router import ResolvedModel
@@ -59,11 +58,11 @@ _MESSAGES: list[dict[str, Any]] = [{"role": "user", "content": _PROMPT}]
 
 @dataclass(frozen=True)
 class _ModelSpec:
-    label: str          # human-readable label shown in output
-    provider: str       # catalog key (deepseek / minimax / moonshot)
-    model_id: str       # LiteLLM model identifier
-    api_base: str       # provider endpoint
-    env_key: str        # env var name shown in skip messages
+    label: str  # human-readable label shown in output
+    provider: str  # catalog key (deepseek / minimax / moonshot)
+    model_id: str  # LiteLLM model identifier
+    api_base: str  # provider endpoint
+    env_key: str  # env var name shown in skip messages
 
 
 _ALL_MODELS: list[_ModelSpec] = [
@@ -153,7 +152,7 @@ class _Result:
     model_id: str
     latency_s: float = 0.0
     output_tokens: int = 0
-    tps: float = 0.0          # output tokens per second
+    tps: float = 0.0  # output tokens per second
     cost_usd: float = 0.0
     response_snip: str = ""
     skipped: bool = False
@@ -183,15 +182,9 @@ def _print_results(results: list[_Result]) -> None:
 
     for r in results:
         if r.skipped:
-            print(
-                _COL.format(
-                    r.label, r.model_id, "—", "—", "—", f"[SKIPPED] {r.skip_reason}"
-                )
-            )
+            print(_COL.format(r.label, r.model_id, "—", "—", "—", f"[SKIPPED] {r.skip_reason}"))
         elif r.error:
-            print(
-                _COL.format(r.label, r.model_id, "—", "—", "—", f"[ERROR] {r.error[:60]}")
-            )
+            print(_COL.format(r.label, r.model_id, "—", "—", "—", f"[ERROR] {r.error[:60]}"))
         else:
             print(
                 _COL.format(
@@ -278,18 +271,13 @@ async def test_inference_benchmark() -> None:
         elif r.error:
             print(f"     ERROR: {r.error[:80]}")
         else:
-            print(
-                f"     OK  latency={r.latency_s:.2f}s  "
-                f"tps={r.tps:.1f}  cost=${r.cost_usd:.6f}"
-            )
+            print(f"     OK  latency={r.latency_s:.2f}s  tps={r.tps:.1f}  cost=${r.cost_usd:.6f}")
 
     _print_results(results)
 
     # At least one provider must have a configured key to consider this run useful.
     active = [r for r in results if not r.skipped]
-    assert active, (
-        "All 6 models were skipped — check that at least DEEPSEEK_API_KEY is set in .env"
-    )
+    assert active, "All 6 models were skipped — check that at least DEEPSEEK_API_KEY is set in .env"
 
     # Every active model that didn't get skipped must not have errored.
     failed = [r for r in active if r.error]
@@ -310,7 +298,7 @@ _PARAM_IDS = [s.label for s in _ALL_MODELS]
 async def test_single_model(spec: _ModelSpec) -> None:
     """One isolated test per model — makes it easy to run a single model:
 
-        pytest tests/inference/test_model_inference.py -k "DeepSeek V4-Pro" -v -s
+    pytest tests/inference/test_model_inference.py -k "DeepSeek V4-Pro" -v -s
     """
     api_key = _api_key_for(spec.provider)
     if api_key is None:

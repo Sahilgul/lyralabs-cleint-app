@@ -65,9 +65,7 @@ class RemindersAdd(Tool[RemindersAddInput, RemindersAddOutput]):
     Input = RemindersAddInput
     Output = RemindersAddOutput
 
-    async def run(
-        self, ctx: ToolContext, args: RemindersAddInput
-    ) -> RemindersAddOutput:
+    async def run(self, ctx: ToolContext, args: RemindersAddInput) -> RemindersAddOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:

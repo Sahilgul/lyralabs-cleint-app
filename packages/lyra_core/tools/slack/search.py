@@ -157,9 +157,7 @@ class SearchFiles(Tool[SearchFilesInput, SearchFilesOutput]):
 
         client = AsyncWebClient(token=token)
         try:
-            resp = await client.search_files(
-                query=args.query, count=args.count, sort=args.sort
-            )
+            resp = await client.search_files(query=args.query, count=args.count, sort=args.sort)
         except SlackApiError as exc:
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.search.files failed: {err}") from exc

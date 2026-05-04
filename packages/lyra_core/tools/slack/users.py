@@ -143,8 +143,7 @@ def _to_user(u: dict[str, Any]) -> _SlackUser:
 class UsersLookupByEmailInput(BaseModel):
     email: str = Field(
         description=(
-            "Email address to look up. Must match the email on the user's "
-            "Slack profile exactly."
+            "Email address to look up. Must match the email on the user's Slack profile exactly."
         )
     )
 

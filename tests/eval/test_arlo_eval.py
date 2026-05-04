@@ -1,7 +1,7 @@
 """ARLO Task Eval — compare all 6 LLM models on realistic ARLO tasks.
 
 This is a *task-quality* eval, not a speed benchmark. Each test case
-mirrors a real request ARLO would receive in Slack. For every (model × case)
+mirrors a real request ARLO would receive in Slack. For every (model x case)
 pair we measure:
 
     routing_ok   — did the model pick the right strategy?
@@ -40,13 +40,12 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from lyra_core.common.config import get_settings
 from lyra_core.common.llm import _call_resolved, estimate_cost
 from lyra_core.llm.router import ResolvedModel
@@ -55,7 +54,7 @@ from lyra_core.llm.router import ResolvedModel
 # Log directory — created fresh each run
 # ---------------------------------------------------------------------------
 
-_RUN_TS = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+_RUN_TS = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
 _LOG_ROOT = Path(__file__).parent.parent.parent / "logs" / f"arlo-eval-{_RUN_TS}"
 
 
@@ -103,7 +102,10 @@ _READ_TOOLS: list[dict[str, Any]] = [
         "List GHL opportunities (deals) in a pipeline, filtered by stage or status.",
         {
             "pipeline_id": {"type": "string", "description": "Pipeline ID to query"},
-            "stage_name": {"type": "string", "description": "Stage name filter, e.g. 'Negotiation'"},
+            "stage_name": {
+                "type": "string",
+                "description": "Stage name filter, e.g. 'Negotiation'",
+            },
             "status": {"type": "string", "description": "open | won | lost | abandoned"},
             "limit": {"type": "integer"},
         },
@@ -230,7 +232,10 @@ _SUBMIT_PLAN_SCHEMA: dict[str, Any] = {
         "parameters": {
             "type": "object",
             "properties": {
-                "goal": {"type": "string", "description": "One-sentence description of what will be done"},
+                "goal": {
+                    "type": "string",
+                    "description": "One-sentence description of what will be done",
+                },
                 "steps": {
                     "type": "array",
                     "items": {
@@ -250,16 +255,14 @@ _SUBMIT_PLAN_SCHEMA: dict[str, Any] = {
     },
 }
 
-_ALL_TOOLS = _READ_TOOLS + [_SUBMIT_PLAN_SCHEMA]
+_ALL_TOOLS = [*_READ_TOOLS, _SUBMIT_PLAN_SCHEMA]
 
 # Tools that have at least one REQUIRED field in their schema.
 # Used by _score() — calling a tool with empty args is only wrong when
 # the schema actually requires something. Tools with no required fields
 # (e.g. ghl.pipelines.list, slack.users.list) are fine with {}.
 _TOOLS_WITH_REQUIRED: frozenset[str] = frozenset(
-    sc["function"]["name"]
-    for sc in _READ_TOOLS
-    if sc["function"]["parameters"].get("required")
+    sc["function"]["name"] for sc in _READ_TOOLS if sc["function"]["parameters"].get("required")
 )
 
 # ---------------------------------------------------------------------------
@@ -274,36 +277,38 @@ _WORKSPACE_FACTS = (
     "  - timezone: America/New_York"
 )
 
-_SYSTEM_PROMPT = "\n".join([
-    "You are ARLO — a senior operations coworker for a marketing agency that runs on GoHighLevel.",
-    "You live in Slack. The team relies on you to run real work in their CRM, calendars, and comms.",
-    "",
-    "# Voice — friendly but professional",
-    "Sound like a senior ops teammate: good at the job, respects their time. Not chatty, not robotic.",
-    "Lead with the result. No 'Sure!', 'I'd be happy to help!', or 'Hope this helps!' preambles.",
-    "Use Slack markdown: *bold*, _italic_, `code`. No ## headings, no **bold**, no | table | pipes |.",
-    "",
-    "# Tool discipline",
-    "READ tools (call freely): ghl.contacts.search, ghl.opportunities.list, ghl.conversations.list,",
-    "  ghl.pipelines.list, ghl.calendars.available_slots, slack.conversations.history,",
-    "  slack.search.messages, slack.users.lookup_by_email, slack.users.list, discover_tools.",
-    "",
-    "WRITE tools (must go through submit_plan_for_approval):",
-    _WRITE_TOOLS_PROMPT,
-    "",
-    "For ANY task that creates / updates / sends / books / deletes: call submit_plan_for_approval.",
-    "Never call a write tool directly — it will be rejected. Each plan step needs full args.",
-    "",
-    "For smalltalk or simple factual questions (date, thanks, etc.), reply directly without tools.",
-    "",
-    "# Workspace context",
-    _WORKSPACE_FACTS,
-    "",
-    "Conversation artifact: (none yet)",
-    "Learned workflow shortcuts: (none yet)",
-    "",
-    "Be the coworker they brag about.",
-])
+_SYSTEM_PROMPT = "\n".join(
+    [
+        "You are ARLO — a senior operations coworker for a marketing agency that runs on GoHighLevel.",
+        "You live in Slack. The team relies on you to run real work in their CRM, calendars, and comms.",
+        "",
+        "# Voice — friendly but professional",
+        "Sound like a senior ops teammate: good at the job, respects their time. Not chatty, not robotic.",
+        "Lead with the result. No 'Sure!', 'I'd be happy to help!', or 'Hope this helps!' preambles.",
+        "Use Slack markdown: *bold*, _italic_, `code`. No ## headings, no **bold**, no | table | pipes |.",
+        "",
+        "# Tool discipline",
+        "READ tools (call freely): ghl.contacts.search, ghl.opportunities.list, ghl.conversations.list,",
+        "  ghl.pipelines.list, ghl.calendars.available_slots, slack.conversations.history,",
+        "  slack.search.messages, slack.users.lookup_by_email, slack.users.list, discover_tools.",
+        "",
+        "WRITE tools (must go through submit_plan_for_approval):",
+        _WRITE_TOOLS_PROMPT,
+        "",
+        "For ANY task that creates / updates / sends / books / deletes: call submit_plan_for_approval.",
+        "Never call a write tool directly — it will be rejected. Each plan step needs full args.",
+        "",
+        "For smalltalk or simple factual questions (date, thanks, etc.), reply directly without tools.",
+        "",
+        "# Workspace context",
+        _WORKSPACE_FACTS,
+        "",
+        "Conversation artifact: (none yet)",
+        "Learned workflow shortcuts: (none yet)",
+        "",
+        "Be the coworker they brag about.",
+    ]
+)
 
 # ---------------------------------------------------------------------------
 # Test cases
@@ -313,14 +318,14 @@ _SYSTEM_PROMPT = "\n".join([
 @dataclass(frozen=True)
 class EvalCase:
     case_id: str
-    category: str           # ghl-read | ghl-write | slack-read | slack-write | multi-step | direct
+    category: str  # ghl-read | ghl-write | slack-read | slack-write | multi-step | direct
     user_request: str
-    expected_routing: str   # "plan" | "tool" | "direct" | "read_or_plan"
+    expected_routing: str  # "plan" | "tool" | "direct" | "read_or_plan"
     # "read_or_plan" = model must search/read first (ID unknown), then plan the write.
     # Both tool-call routing AND plan routing count as correct for these cases,
     # because in a single-turn eval the model can only do one of the two steps.
-    expected_tool_hint: str # substring the correct tool name must contain; "" = any tool OK
-    notes: str = ""         # human-readable rationale
+    expected_tool_hint: str  # substring the correct tool name must contain; "" = any tool OK
+    notes: str = ""  # human-readable rationale
 
 
 _CASES: list[EvalCase] = [
@@ -539,7 +544,7 @@ _FORBIDDEN_PHRASES = [
     r"task completed successfully",
     r"i have completed your request",
     r"as an ai",
-    r"## \w",   # Markdown H2 headings (wrong in Slack)
+    r"## \w",  # Markdown H2 headings (wrong in Slack)
     r"\*\*\w",  # **bold** (should be *bold* in Slack)
 ]
 _FORBIDDEN_RE = [re.compile(p, re.IGNORECASE) for p in _FORBIDDEN_PHRASES]
@@ -595,9 +600,7 @@ def _score(
                     fields are fine with {}, e.g. ghl.pipelines.list).
       voice_ok    — no forbidden phrases in the text response.
     """
-    called_names = [
-        (tc.get("function") or {}).get("name", "") for tc in tool_calls
-    ]
+    called_names = [(tc.get("function") or {}).get("name", "") for tc in tool_calls]
     has_plan = "submit_plan_for_approval" in called_names
     has_tool = bool(tool_calls) and not has_plan
     has_direct = not tool_calls
@@ -621,9 +624,7 @@ def _score(
     for tc in tool_calls:
         if (tc.get("function") or {}).get("name") == "submit_plan_for_approval":
             try:
-                plan_args = json.loads(
-                    (tc.get("function") or {}).get("arguments", "{}") or "{}"
-                )
+                plan_args = json.loads((tc.get("function") or {}).get("arguments", "{}") or "{}")
                 for step in plan_args.get("steps", []):
                     plan_step_names.append(step.get("tool_name", ""))
             except json.JSONDecodeError:
@@ -675,7 +676,7 @@ def _score(
 
 
 # ---------------------------------------------------------------------------
-# Single (model × case) eval
+# Single (model x case) eval
 # ---------------------------------------------------------------------------
 
 
@@ -753,17 +754,17 @@ async def _eval_one(model: _ModelSpec, case: EvalCase, api_key: str) -> EvalResu
             fn = getattr(tc, "function", None)
             if fn is None:
                 continue
-            tool_calls.append({
-                "id": getattr(tc, "id", ""),
-                "function": {
-                    "name": fn.name,
-                    "arguments": fn.arguments or "{}",
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": getattr(tc, "id", ""),
+                    "function": {
+                        "name": fn.name,
+                        "arguments": fn.arguments or "{}",
+                    },
+                }
+            )
 
-        result.tools_called = [
-            (tc["function"]["name"]) for tc in tool_calls
-        ]
+        result.tools_called = [(tc["function"]["name"]) for tc in tool_calls]
 
         # Extract plan steps for submit_plan_for_approval calls
         for tc in tool_calls:
@@ -820,11 +821,7 @@ def _write_case_log(result: EvalResult) -> None:
             "plan_steps": result.plan_steps,
             "response_text": result.response_text,
         },
-        "status": (
-            "skipped" if result.skipped
-            else "error" if result.error
-            else "ok"
-        ),
+        "status": ("skipped" if result.skipped else "error" if result.error else "ok"),
         "skip_reason": result.skip_reason,
         "error": result.error,
     }
@@ -909,8 +906,7 @@ def _print_header() -> None:
     print(_SEP)
     print(
         _COL.format(
-            "Model", "Case", "Category", "Routing", "Tool Hit", "Args OK",
-            "Latency", "Cost $"
+            "Model", "Case", "Category", "Routing", "Tool Hit", "Args OK", "Latency", "Cost $"
         )
     )
     print("-" * 100)
@@ -922,10 +918,7 @@ def _print_row(r: EvalResult) -> None:
         print(f"  {r.model_label:<20} {r.case_id:<26} {status}")
         return
     if r.error:
-        print(
-            f"  {r.model_label:<20} {r.case_id:<26} "
-            f"[ERROR] {r.error[:50]}"
-        )
+        print(f"  {r.model_label:<20} {r.case_id:<26} [ERROR] {r.error[:50]}")
         return
     print(
         _COL.format(
@@ -946,12 +939,25 @@ def _print_summary_table(all_results: list[EvalResult]) -> None:
     readplan_cases = [c for c in _CASES if c.expected_routing == "read_or_plan"]
     print(f"\n{_SEP}")
     print("  SUMMARY BY MODEL")
-    print(f"  Routing% = correct strategy across all 15 cases")
+    print("  Routing% = correct strategy across all 15 cases")
     print(f"  Plan cases ({len(plan_cases)}): must submit_plan_for_approval (all info given)")
-    print(f"  Read-or-plan ({len(readplan_cases)}): must read first (ID unknown) OR plan — both are correct")
+    print(
+        f"  Read-or-plan ({len(readplan_cases)}): must read first (ID unknown) OR plan — both are correct"
+    )
     print(_SEP)
     hdr = "{:<22} {:>6} {:>10} {:>10} {:>9} {:>9} {:>10} {:>12}"
-    print(hdr.format("Model", "Cases", "Routing %", "Tool Hit %", "Args %", "Voice %", "Avg Lat", "Total Cost"))
+    print(
+        hdr.format(
+            "Model",
+            "Cases",
+            "Routing %",
+            "Tool Hit %",
+            "Args %",
+            "Voice %",
+            "Avg Lat",
+            "Total Cost",
+        )
+    )
     print("-" * 100)
 
     per: dict[str, list[EvalResult]] = {}
@@ -974,16 +980,18 @@ def _print_summary_table(all_results: list[EvalResult]) -> None:
         avg_lat = sum(r.latency_s for r in active) / n
         total_cost = sum(r.cost_usd for r in active)
         suffix = f" (skip={skipped})" if skipped or errors else ""
-        print(hdr.format(
-            label + suffix,
-            n,
-            f"{routing_pct:.0f}%",
-            f"{tool_pct:.0f}%",
-            f"{args_pct:.0f}%",
-            f"{voice_pct:.0f}%",
-            f"{avg_lat:.1f}s",
-            f"${total_cost:.4f}",
-        ))
+        print(
+            hdr.format(
+                label + suffix,
+                n,
+                f"{routing_pct:.0f}%",
+                f"{tool_pct:.0f}%",
+                f"{args_pct:.0f}%",
+                f"{voice_pct:.0f}%",
+                f"{avg_lat:.1f}s",
+                f"${total_cost:.4f}",
+            )
+        )
     print(_SEP)
     print(f"  Full logs → {_LOG_ROOT}\n")
 
@@ -995,9 +1003,9 @@ def _print_summary_table(all_results: list[EvalResult]) -> None:
 
 @pytest.mark.live
 async def test_arlo_eval_all() -> None:
-    """Run all 6 models × all 15 cases. Saves JSON logs; prints summary table.
+    """Run all 6 models x all 15 cases. Saves JSON logs; prints summary table.
 
-    Pass as long as at least one model × case pair completes without error.
+    Pass as long as at least one model x case pair completes without error.
     Skips models whose API key is missing.
     """
     _LOG_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1052,9 +1060,7 @@ async def test_arlo_eval_all() -> None:
     # Warn (not fail) if errors — so partial runs still save useful data
     errors = [r for r in active if r.error]
     if errors:
-        msgs = "\n".join(
-            f"  {r.model_label} / {r.case_id}: {r.error}" for r in errors[:10]
-        )
+        msgs = "\n".join(f"  {r.model_label} / {r.case_id}: {r.error}" for r in errors[:10])
         pytest.fail(f"{len(errors)} case(s) returned errors:\n{msgs}")
 
 
@@ -1100,7 +1106,9 @@ async def test_arlo_eval_model(model: _ModelSpec) -> None:
                 print(f"    tools: {r.tools_called}")
             if r.plan_steps:
                 for s in r.plan_steps:
-                    print(f"    plan step: {s.get('tool_name')}  args={json.dumps(s.get('args', {}))[:80]}")
+                    print(
+                        f"    plan step: {s.get('tool_name')}  args={json.dumps(s.get('args', {}))[:80]}"
+                    )
 
     # Summary
     active = [r for r in results if not r.error]
@@ -1113,7 +1121,9 @@ async def test_arlo_eval_model(model: _ModelSpec) -> None:
         avg_lat = sum(r.latency_s for r in active) / n
         total_cost = sum(r.cost_usd for r in active)
         print(f"\n  ── {model.label} summary ──")
-        print(f"  Routing:   {routing_pct:.0f}%  |  Tool Hit: {tool_pct:.0f}%  |  Args OK: {args_pct:.0f}%  |  Voice OK: {voice_pct:.0f}%")
+        print(
+            f"  Routing:   {routing_pct:.0f}%  |  Tool Hit: {tool_pct:.0f}%  |  Args OK: {args_pct:.0f}%  |  Voice OK: {voice_pct:.0f}%"
+        )
         print(f"  Avg Lat:   {avg_lat:.1f}s  |  Total Cost: ${total_cost:.4f}")
 
     _write_summary(results)

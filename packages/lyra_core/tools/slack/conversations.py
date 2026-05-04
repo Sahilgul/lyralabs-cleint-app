@@ -242,9 +242,7 @@ class ConversationsOpen(Tool[ConversationsOpenInput, ConversationsOpenOutput]):
     Input = ConversationsOpenInput
     Output = ConversationsOpenOutput
 
-    async def run(
-        self, ctx: ToolContext, args: ConversationsOpenInput
-    ) -> ConversationsOpenOutput:
+    async def run(self, ctx: ToolContext, args: ConversationsOpenInput) -> ConversationsOpenOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:
@@ -313,9 +311,7 @@ class ConversationsList(Tool[ConversationsListInput, ConversationsListOutput]):
     Input = ConversationsListInput
     Output = ConversationsListOutput
 
-    async def run(
-        self, ctx: ToolContext, args: ConversationsListInput
-    ) -> ConversationsListOutput:
+    async def run(self, ctx: ToolContext, args: ConversationsListInput) -> ConversationsListOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:
@@ -370,9 +366,7 @@ class ConversationsInfo(Tool[ConversationsInfoInput, ConversationsInfoOutput]):
     Input = ConversationsInfoInput
     Output = ConversationsInfoOutput
 
-    async def run(
-        self, ctx: ToolContext, args: ConversationsInfoInput
-    ) -> ConversationsInfoOutput:
+    async def run(self, ctx: ToolContext, args: ConversationsInfoInput) -> ConversationsInfoOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:
@@ -441,9 +435,7 @@ class ConversationsInvite(Tool[ConversationsInviteInput, ConversationsInviteOutp
             # for the whole call. Best-effort: surface a helpful message.
             raise ToolError(f"slack.conversations.invite failed: {err}") from exc
 
-        return ConversationsInviteOutput(
-            channel_id=args.channel_id, invited=list(args.user_ids)
-        )
+        return ConversationsInviteOutput(channel_id=args.channel_id, invited=list(args.user_ids))
 
 
 # -----------------------------------------------------------------------------
@@ -491,9 +483,7 @@ class ConversationsCreate(Tool[ConversationsCreateInput, ConversationsCreateOutp
 
         client = AsyncWebClient(token=token)
         try:
-            resp = await client.conversations_create(
-                name=args.name, is_private=args.is_private
-            )
+            resp = await client.conversations_create(name=args.name, is_private=args.is_private)
         except SlackApiError as exc:
             err = (exc.response.data or {}).get("error", str(exc))
             raise ToolError(f"slack.conversations.create failed: {err}") from exc

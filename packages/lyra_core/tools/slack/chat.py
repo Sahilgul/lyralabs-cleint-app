@@ -148,9 +148,7 @@ class ChatScheduleMessage(Tool[ScheduleMessageInput, ScheduleMessageOutput]):
     Input = ScheduleMessageInput
     Output = ScheduleMessageOutput
 
-    async def run(
-        self, ctx: ToolContext, args: ScheduleMessageInput
-    ) -> ScheduleMessageOutput:
+    async def run(self, ctx: ToolContext, args: ScheduleMessageInput) -> ScheduleMessageOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:

@@ -481,7 +481,6 @@ async def test_on_message_channel_thread_enqueues_when_active(monkeypatch) -> No
     """A channel thread message (no @-mention) from an active thread must be
     enqueued -- the user should NOT need to @-mention the bot on every reply.
     """
-    from lyra_core.channels.slack.adapter import _register_event_handlers
 
     import lyra_core.worker.queue as queue_mod
 

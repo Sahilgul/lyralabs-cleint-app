@@ -82,9 +82,7 @@ class FilesUpload(Tool[FilesUploadInput, FilesUploadOutput]):
         try:
             content = base64.b64decode(args.content_b64, validate=True)
         except Exception as exc:
-            raise ToolError(
-                f"slack.files.upload: content_b64 is not valid base64 ({exc})"
-            ) from exc
+            raise ToolError(f"slack.files.upload: content_b64 is not valid base64 ({exc})") from exc
 
         client = AsyncWebClient(token=token)
         kwargs: dict[str, Any] = {

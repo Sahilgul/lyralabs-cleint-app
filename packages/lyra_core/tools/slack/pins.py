@@ -19,9 +19,7 @@ from ._client import SlackTokenMissing, _bot_token_for
 
 class PinsAddInput(BaseModel):
     channel_id: str = Field(description="Channel/group id where the message lives.")
-    timestamp: str = Field(
-        description="ts of the message to pin (e.g. '1717174800.123456')."
-    )
+    timestamp: str = Field(description="ts of the message to pin (e.g. '1717174800.123456').")
 
 
 class PinsAddOutput(BaseModel):
