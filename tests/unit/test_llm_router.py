@@ -210,6 +210,115 @@ async def test_invalidate_cache_forces_db_reload(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_critic_tier_falls_back_to_env(monkeypatch) -> None:
+    """resolve('critic') must use env settings (LLM_CRITIC_MODEL) when no DB
+    assignment exists — same bootstrap behaviour as primary/cheap."""
+    monkeypatch.setattr(
+        router_mod,
+        "async_session",
+        lambda: _FakeSession(providers=[], assignments=[]),
+    )
+
+    resolved = await router_mod.resolve("critic")
+
+    assert resolved.source == "env"
+    assert resolved.tier == "critic"
+    assert resolved.model_id  # whatever LLM_CRITIC_MODEL is in the test env
+
+
+@pytest.mark.asyncio
+async def test_resolve_critic_tier_uses_db_when_present(monkeypatch) -> None:
+    """An operator can override the critic model via the admin UI."""
+    monkeypatch.setattr(
+        router_mod,
+        "async_session",
+        lambda: _FakeSession(
+            providers=[_provider(key="minimax", api_key="sk-minimax")],
+            assignments=[
+                _assignment(
+                    tier="critic",
+                    provider_key="minimax",
+                    model_id="openai/MiniMax-M2.7",
+                )
+            ],
+        ),
+    )
+
+    resolved = await router_mod.resolve("critic")
+
+    assert resolved.source == "db"
+    assert resolved.model_id == "openai/MiniMax-M2.7"
+    assert resolved.api_key == "sk-minimax"
+
+
+# --- build_env_fallback_chain -------------------------------------------------
+
+
+def test_build_env_fallback_chain_pro_has_three_providers(monkeypatch) -> None:
+    """Pro chain: DeepSeek → MiniMax → Kimi, in that order."""
+    monkeypatch.setattr(router_mod, "_env_api_key_for", lambda spec: "sk-fake")
+
+    chain = router_mod.build_env_fallback_chain("pro")
+
+    assert len(chain) == 3
+    provider_keys = [m.provider_key for m in chain]
+    assert provider_keys[0] == "deepseek"
+    assert provider_keys[1] == "minimax"
+    assert provider_keys[2] == "moonshot"
+
+
+def test_build_env_fallback_chain_flash_has_three_providers(monkeypatch) -> None:
+    """Flash chain has the same provider order as pro, different model IDs."""
+    monkeypatch.setattr(router_mod, "_env_api_key_for", lambda spec: "sk-fake")
+
+    chain = router_mod.build_env_fallback_chain("flash")
+
+    assert len(chain) == 3
+    assert chain[0].provider_key == "deepseek"
+    assert chain[1].provider_key == "minimax"
+    assert chain[2].provider_key == "moonshot"
+
+
+def test_build_env_fallback_chain_skips_provider_without_key(monkeypatch) -> None:
+    """A provider with no API key is silently dropped so the remaining
+    providers are still attempted."""
+
+    def _key_for(spec):
+        return None if spec.key == "minimax" else "sk-fake"
+
+    monkeypatch.setattr(router_mod, "_env_api_key_for", _key_for)
+
+    chain = router_mod.build_env_fallback_chain("pro")
+    provider_keys = [m.provider_key for m in chain]
+
+    assert "minimax" not in provider_keys
+    assert "deepseek" in provider_keys
+    assert "moonshot" in provider_keys
+
+
+def test_build_env_fallback_chain_empty_when_no_keys(monkeypatch) -> None:
+    """All keys missing → empty list. chat_with_fallback raises RuntimeError."""
+    monkeypatch.setattr(router_mod, "_env_api_key_for", lambda spec: None)
+
+    chain = router_mod.build_env_fallback_chain("pro")
+
+    assert chain == []
+
+
+def test_build_env_fallback_chain_source_is_env(monkeypatch) -> None:
+    """Every entry in the chain must have source='env' (built from env vars,
+    not from a DB assignment lookup)."""
+    monkeypatch.setattr(router_mod, "_env_api_key_for", lambda spec: "sk-fake")
+
+    chain = router_mod.build_env_fallback_chain("pro")
+
+    assert all(m.source == "env" for m in chain)
+
+
+# --- db failure ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
 async def test_resolve_survives_db_failure(monkeypatch, caplog) -> None:
     """If Postgres is briefly unreachable, resolve() must fall back to env --
     breaking the agent because the admin DB hiccuped is unacceptable."""
