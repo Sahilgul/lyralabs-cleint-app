@@ -57,7 +57,7 @@ async def _run_rehearsal(
             args_obj = tool.Input(**step.args)
             text = await asyncio.wait_for(tool.simulate(sim_ctx, args_obj), timeout=1.5)
         except Exception:
-            text = f"Will call `{step.tool_name}`."
+            text = ""
         return step.id, text
 
     results = await asyncio.gather(
@@ -85,7 +85,7 @@ def _plan_preview_blocks(
         emoji = tier_emoji.get(profile.tier, "•") if profile else "•"
         write_tag = " _(write)_" if step.requires_approval else ""
         preview = previews.get(step.id, "")
-        line = f"{emoji} *{i + 1}. `{step.tool_name}`*\n   {step.rationale}{write_tag}"
+        line = f"{emoji} *{i + 1}.* {step.rationale}{write_tag}"
         if preview:
             line += f"\n   _{preview}_"
         step_lines.append(line)

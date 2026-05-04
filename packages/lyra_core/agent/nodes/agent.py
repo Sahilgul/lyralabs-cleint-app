@@ -117,13 +117,20 @@ Each step in the plan MUST include the full `args` dict — every parameter the 
 
 Artifact tools (e.g. `artifact.pdf.from_markdown`, `artifact.chart.line`, `artifact.chart.bar`) generate downloadable files without mutating any external system — safe to call directly or include in a plan.
 
-### Slack tools (use ONLY for Slack-native asks)
-  - `slack.conversations.history` / `.replies` — Slack messages in a channel/thread
-  - `slack.users.info` / `.list` — Slack workspace members (these are *Slack* users, not CRM users)
-  - `slack.search.messages` — search Slack
-  - `slack.canvas.create` — WRITE: create a Slack canvas (via plan)
+### Tool namespaces — routing rules only
+Tool schemas (names, parameters, descriptions) are embedded in the function-calling list — consult them directly. These rules govern *when* to reach for each namespace; they don't repeat what the schemas already say.
 
-Do not use Slack tools to answer questions about external systems. "List the team's customers" is never `slack.users.list`.
+**`slack.*` tools** — use ONLY when the request explicitly involves Slack itself (channels, threads, messages, canvases, members, files, reminders). NEVER for external business data. "List the team's customers" is not a Slack query.
+  - Prefer `slack.users.lookup_by_email` over `slack.users.list` whenever you have an email — it's a single API call vs. pagination.
+  - `slack.chat.send_message` is for posting to a *different* channel/DM/thread. Your final reply in the *current* thread is handled automatically — do NOT call send_message for that.
+  - `slack.conversations.open` can be called directly (no approval) when you only have a user_id and need a channel_id before messaging.
+
+**`google.*`, `ghl.*`, `artifact.*`** — the schemas describe exactly when to use these. Read them.
+
+### Speak before you work — be proactive, not silent
+  - **Long task** (multiple tool calls or >5s of work expected) → write a short progress note alongside your first tool call. It posts to Slack before the tools run: "On it — pulling those 12 deals now, ~10s." Skip this for single fast lookups.
+  - **Thanks / acks** → be proactive. "Anytime — want me to also pull their ad spend?" beats silence. If nothing useful to add, a short "Anytime." is still better than nothing.
+  - **Blocker / bad news** → say it in words with the most likely fix. "Couldn't connect — GHL needs a re-auth. Want a link?"
 
 # Workflow per turn
 
@@ -152,6 +159,11 @@ CORRECT Slack markdown:
 - Code: `` `code` ``
 - Bullets: `•` or `-`
 - Links: `<https://example.com|Click here>`
+
+**Never paste raw HTML, JSON blobs, or code into Slack.** Slack cannot render HTML — it shows as an unreadable wall of tags. When you create or retrieve an email template, invoice, or any HTML/code artifact:
+- Summarize what was built: name, subject line, key sections, CTA
+- Confirm the action: "✅ Leadership Summit 2026 - Invitation template created in GHL"
+- If the user wants the raw code, offer to upload it as a file: "Want me to send the HTML as a file attachment?"
 
 BAD output example:
 ```
@@ -274,6 +286,54 @@ def _format_skills(skills: list[dict[str, Any]]) -> str:
         desc = s.get("description") or f"{len(s.get('tool_sequence', []))} steps"
         lines.append(f"  - `{s['slug']}`: {s['name']} ({desc})")
     return "\n".join(lines)
+
+
+async def _route_read_tools(
+    user_request: str,
+    recent_history: list[dict[str, Any]],
+    read_tools: list[Any],
+) -> list[Any]:
+    """Use CHEAP model to pick only the read tools relevant to this request.
+
+    Sends only tool names + descriptions (not full schemas) to the cheap
+    model, then returns the filtered subset. Falls back to all tools on
+    any error so the agent never breaks.
+    """
+    if len(read_tools) <= 5:
+        return read_tools
+
+    index = "\n".join(f"- {t.name}: {t.description}" for t in read_tools)
+    context_lines = [
+        f"{m['role']}: {str(m.get('content') or '')[:300]}"
+        for m in recent_history[-4:]
+        if m.get("role") in {"user", "assistant"}
+    ]
+    context = "\n".join(context_lines) or "(no prior context)"
+
+    try:
+        resp = await chat(
+            tier=ModelTier.CHEAP,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"User request: {user_request}\n\n"
+                        f"Recent conversation:\n{context}\n\n"
+                        f"Available read tools:\n{index}\n\n"
+                        "Which of these tools might be needed to answer this request? "
+                        "Reply with tool names only, one per line. If unsure, include it."
+                    ),
+                }
+            ],
+            max_tokens=150,
+            temperature=0,
+        )
+        raw = resp.choices[0].message.content or ""
+        selected = {line.strip().lstrip("- ") for line in raw.splitlines() if line.strip()}
+        filtered = [t for t in read_tools if t.name in selected]
+        return filtered if filtered else read_tools
+    except Exception:
+        return read_tools
 
 
 def _build_tool_param_list(read_tools: list[Any]) -> list[dict[str, Any]]:
@@ -441,7 +501,9 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
     trimmed = _trim_history(history, MAX_HISTORY_MESSAGES)
     messages = [{"role": "system", "content": system}, *trimmed]
 
-    tool_param_list = _build_tool_param_list(read_tools)
+    async with phase("agent.tool_routing"):
+        routed_reads = await _route_read_tools(user_request, trimmed, read_tools)
+    tool_param_list = _build_tool_param_list(routed_reads)
     async with phase(
         "agent.llm_call",
         n_messages=len(messages),
@@ -550,6 +612,23 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
 
     # Case 2: agent called a read tool -> route to tool_node loop.
     if tool_calls:
+        # If the model also produced text content alongside its tool calls,
+        # treat it as a pre-flight progress note ("On it, pulling those deals
+        # now — ~10s") and post it to Slack BEFORE the tools run. Without
+        # this, the content was silently swallowed and the user saw nothing
+        # until the final reply N seconds later. This is what makes "speak,
+        # don't react" actually work for long tasks.
+        preamble = (assistant_msg.content or "").strip()
+        if preamble:
+            async with phase("agent.post_preamble", text_len=len(preamble)):
+                await post_reply(
+                    tenant_id,
+                    OutboundReply(
+                        text=preamble,
+                        channel_id=state["channel_id"],
+                        thread_ts=state.get("reply_thread_ts"),
+                    ),
+                )
         return base_update
 
     # Case 3: direct reply.

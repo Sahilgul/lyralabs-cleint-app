@@ -111,13 +111,32 @@ class Tool[InT: BaseModel, OutT: BaseModel](ABC):
     async def simulate(self, ctx: ToolContext, args: InT) -> str:
         """Return a human-readable preview of what run() would do.
 
-        Default implementation JSON-dumps the args. Override for richer previews
-        that fetch live data without mutating anything (e.g. rendering a diff).
+        Uses the CHEAP LLM tier to describe the action in plain English.
+        Override only when you want to fetch live data for a richer preview.
         """
+        from ..common.llm import ModelTier, chat
+
         try:
-            return f"Will call `{self.name}` with: {args.model_dump_json(indent=2)}"
+            args_text = args.model_dump_json(indent=2)
+            response = await chat(
+                tier=ModelTier.CHEAP,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool: {self.description}\n"
+                            f"Arguments:\n{args_text}\n\n"
+                            "In one short plain-English sentence, describe exactly what this will do. "
+                            "Use specific names/values from the arguments. No technical terms, no JSON, no code."
+                        ),
+                    }
+                ],
+                max_tokens=80,
+                temperature=0,
+            )
+            return response.choices[0].message.content.strip()
         except Exception:
-            return f"Will call `{self.name}`."
+            return ""
 
     async def safe_run(self, ctx: ToolContext, args: InT) -> ToolResult[OutT]:
         """Wrap `run` with error handling. Always returns a ToolResult."""

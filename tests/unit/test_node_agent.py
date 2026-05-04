@@ -100,6 +100,73 @@ async def test_agent_node_read_tool_call_routes_to_tool_node(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_agent_node_posts_preamble_text_alongside_tool_calls(monkeypatch) -> None:
+    """When the LLM produces both `content` (a progress note) and `tool_calls`
+    on the same turn, the content must be posted to Slack as a pre-flight
+    note BEFORE the tools run -- this is what makes 'speak, don't react'
+    work for long tasks. Without this hook, the content was swallowed and
+    the user only saw the final reply N seconds later."""
+    tool_calls = [
+        {
+            "id": "tc-1",
+            "function": {
+                "name": "ghl.contacts.search",
+                "arguments": json.dumps({"query": "stuck deals"}),
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        agent_mod,
+        "chat",
+        AsyncMock(
+            return_value=_resp(
+                content="On it — pulling those stuck deals now, ~10s.",
+                tool_calls=tool_calls,
+            )
+        ),
+    )
+    monkeypatch.setattr(agent_mod, "get_workspace_facts", AsyncMock(return_value={}))
+    posted = AsyncMock()
+    monkeypatch.setattr(agent_mod, "post_reply", posted)
+
+    out = await agent_node(_state(user_request="pull the stuck deals"))
+
+    posted.assert_awaited_once()
+    reply_arg = posted.await_args.args[1]
+    assert reply_arg.text == "On it — pulling those stuck deals now, ~10s."
+    assert reply_arg.channel_id == "C1"
+    # Still routes to tool_node -- preamble doesn't end the turn.
+    assert out.get("pending_plan") is None
+    assert "final_summary" not in out
+    assert out["messages"][-1]["tool_calls"][0]["function"]["name"] == "ghl.contacts.search"
+
+
+@pytest.mark.asyncio
+async def test_agent_node_skips_empty_preamble(monkeypatch) -> None:
+    """No preamble text + tool_calls -> no Slack post. Avoids posting empty
+    placeholder messages when the LLM doesn't volunteer a progress note."""
+    tool_calls = [
+        {
+            "id": "tc-1",
+            "function": {
+                "name": "ghl.contacts.search",
+                "arguments": json.dumps({"query": "x"}),
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        agent_mod, "chat", AsyncMock(return_value=_resp(content="   ", tool_calls=tool_calls))
+    )
+    monkeypatch.setattr(agent_mod, "get_workspace_facts", AsyncMock(return_value={}))
+    posted = AsyncMock()
+    monkeypatch.setattr(agent_mod, "post_reply", posted)
+
+    await agent_node(_state(user_request="x"))
+
+    posted.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_agent_node_submit_plan_sets_pending_plan(monkeypatch) -> None:
     """submit_plan_for_approval populates state.pending_plan -> routes to approval."""
     plan_args = {
