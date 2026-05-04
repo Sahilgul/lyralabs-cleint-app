@@ -46,12 +46,31 @@ class _BadTool(Tool[_In, _Out]):
         raise RuntimeError("boom")
 
 
+class _StrictIn(BaseModel):
+    query: str  # required — no default
+
+
+class _StrictTool(Tool[_StrictIn, _Out]):
+    """Tool with a required arg; used to test arg-validation failure paths."""
+
+    name = "test.strict"
+    description = "strict"
+    provider = "test"
+    Input = _StrictIn
+    Output = _Out
+
+    async def run(self, ctx: ToolContext, args: _StrictIn) -> _Out:
+        return _Out(echoed=args.query)
+
+
 @pytest.fixture(autouse=True)
 def _register_test_tools():
     if "test.echo" not in {t.name for t in default_registry.all()}:
         default_registry.register(_EchoTool())
     if "test.bad" not in {t.name for t in default_registry.all()}:
         default_registry.register(_BadTool())
+    if "test.strict" not in {t.name for t in default_registry.all()}:
+        default_registry.register(_StrictTool())
     yield
 
 
@@ -204,10 +223,10 @@ async def test_executor_arg_validation_failure_records_error(monkeypatch, mock_s
 
     monkeypatch.setattr(executor_mod, "async_session", lambda: _CM())
 
-    # ghl.contacts.search.Input requires 'query: str' — no field omitted should fail
+    # test.strict.Input requires 'query: str' — passing empty args must fail validation
     plan = Plan(
         goal="g",
-        steps=[PlanStep(id="step_1", tool_name="ghl.contacts.search", rationale="r", args={})],
+        steps=[PlanStep(id="step_1", tool_name="test.strict", rationale="r", args={})],
     )
     out = await executor_node(_state_with_plan(plan))  # type: ignore[arg-type]
     assert out["step_results"][0]["ok"] is False

@@ -62,6 +62,13 @@ def _register_tools():
 
 @pytest.mark.asyncio
 async def test_slow_tool_falls_back_gracefully() -> None:
+    """Timed-out simulate() must not crash the rehearsal.
+
+    The new contract: steps that time out are silently omitted from the
+    previews dict (the approval card handles missing steps gracefully via
+    ``previews.get(step.id, "")``). We just assert that the call returns
+    without raising and that the timed-out step is absent.
+    """
     plan = Plan(
         goal="g",
         steps=[PlanStep(id="s1", tool_name="_test_slow_tool", rationale="r", args={"msg": "x"})],
@@ -77,8 +84,8 @@ async def test_slow_tool_falls_back_gracefully() -> None:
         user_id=None,
         client_id=None,
     )
-    assert "s1" in previews
-    assert "_test_slow_tool" in previews["s1"]
+    assert isinstance(previews, dict)
+    assert "s1" not in previews  # timed out → omitted, not a crash
 
 
 @pytest.mark.asyncio
