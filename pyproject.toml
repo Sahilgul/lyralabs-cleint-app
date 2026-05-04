@@ -86,6 +86,9 @@ ignore = ["S101", "E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live: hits real provider APIs — requires API keys in .env (deselect with -m 'not live')",
+]
 
 [tool.mypy]
 python_version = "3.12"

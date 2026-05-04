@@ -1,0 +1,13 @@
+# Secrets — never expose to AI context
+.env
+*.env
+.env.*
+!.env.example
+
+# Keys and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
