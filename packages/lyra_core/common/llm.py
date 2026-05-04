@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 import litellm
 from litellm import acompletion
@@ -311,7 +311,6 @@ async def chat_with_fallback(
             "Check DEEPSEEK_API_KEY / MINIMAX_API_KEY / KIMI_API_KEY in env."
         )
 
-    last_exc: BaseException | None = None
     for idx, resolved in enumerate(chain):
         is_last = idx == len(chain) - 1
         try:
@@ -344,7 +343,6 @@ async def chat_with_fallback(
             return response
 
         except _RETRYABLE_ERRORS as exc:
-            last_exc = exc
             logger.warning(
                 "llm.fallback.provider_failed",
                 quality=quality,

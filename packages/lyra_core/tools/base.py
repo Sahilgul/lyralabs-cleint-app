@@ -134,7 +134,7 @@ class Tool[InT: BaseModel, OutT: BaseModel](ABC):
                 max_tokens=80,
                 temperature=0,
             )
-            return response.choices[0].message.content.strip()
+            return (response.choices[0].message.content or "").strip()
         except Exception:
             return ""
 

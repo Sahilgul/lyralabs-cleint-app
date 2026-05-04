@@ -19,7 +19,6 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..base import Tool, ToolContext, ToolError, TrustTier
-from ..registry import default_registry
 from ._client import SlackTokenMissing, _bot_token_for
 
 

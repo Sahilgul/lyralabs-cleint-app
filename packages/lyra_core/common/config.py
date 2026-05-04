@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     kimi_api_key: str = ""
 
     llm_primary_model: str = "deepseek/deepseek-v4-pro"
-    llm_critic_model: str = "openai/MiniMax-M2.7"   # final user-facing summary writer
+    llm_critic_model: str = "openai/MiniMax-M2.7"  # final user-facing summary writer
     llm_cheap_model: str = "gemini/gemini-2.5-flash"
     llm_embedding_model: str = "text-embedding-3-small"
 

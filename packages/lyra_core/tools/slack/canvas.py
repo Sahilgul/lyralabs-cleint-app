@@ -100,9 +100,7 @@ class CanvasUpdateInput(BaseModel):
             "`insert_at_start` prepends, `replace` swaps the entire body."
         ),
     )
-    markdown: str = Field(
-        description="Slack-flavored markdown to insert / replace."
-    )
+    markdown: str = Field(description="Slack-flavored markdown to insert / replace.")
 
 
 class CanvasUpdateOutput(BaseModel):
@@ -124,9 +122,7 @@ class CanvasUpdate(Tool[CanvasUpdateInput, CanvasUpdateOutput]):
     Input = CanvasUpdateInput
     Output = CanvasUpdateOutput
 
-    async def run(
-        self, ctx: ToolContext, args: CanvasUpdateInput
-    ) -> CanvasUpdateOutput:
+    async def run(self, ctx: ToolContext, args: CanvasUpdateInput) -> CanvasUpdateOutput:
         try:
             token = await _bot_token_for(ctx.tenant_id)
         except SlackTokenMissing as exc:
@@ -188,7 +184,7 @@ class CanvasRead(Tool[CanvasReadInput, CanvasReadOutput]):
         # object, not a list), but this call is the canonical way to dump
         # canvas content as markdown.
         try:
-            resp = await client.api_call(  # type: ignore[attr-defined]
+            resp = await client.api_call(
                 "canvases.sections.lookup",
                 params={
                     "canvas_id": args.canvas_id,
