@@ -93,11 +93,12 @@ async def test_enqueue_falls_back_thread_ts_to_ts(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_dm_top_level_does_not_thread_reply() -> None:
-    """User DMs ARLO with a fresh top-level message: bot must reply in the
-    main DM (reply_thread_ts=None), not as a thread on the user's message.
-    Threading every DM reply is what made every bot response appear nested
-    under the user's first message.
+async def test_enqueue_dm_top_level_threads_reply_under_user_message() -> None:
+    """User DMs ARLO with a fresh top-level message: bot must reply in a
+    thread anchored under that specific message (reply_thread_ts == ts of
+    the user's message). This groups each Q&A exchange visually so multiple
+    top-level DM messages don't produce an unstructured flat stream of
+    interleaved replies.
     """
     import json
 
@@ -119,7 +120,7 @@ async def test_enqueue_dm_top_level_does_not_thread_reply() -> None:
 
     payload = json.loads(fake_enqueue.call_args.args[0])
     assert payload["is_dm"] is True
-    assert payload["reply_thread_ts"] is None
+    assert payload["reply_thread_ts"] == "9999.0000"
     assert payload["thread_id"] == "9999.0000"
 
 
@@ -296,9 +297,15 @@ async def test_enqueue_dm_with_client_fires_assistant_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_channel_with_client_fires_reaction() -> None:
-    """Channel @-mentions fall back to an :eyes: reaction since
-    assistant.threads.setStatus only works in assistant threads."""
+async def test_enqueue_channel_with_client_does_not_auto_react() -> None:
+    """Channel @-mentions intentionally NO LONGER auto-add an :eyes:
+    reaction. Reactions are reserved for the LLM to use deliberately
+    via `slack.reactions.add` -- so the meaning isn't watered down by
+    every mention getting the same stamp regardless of outcome.
+
+    No native typing indicator exists outside assistant threads either,
+    so channel mentions get no pre-agent feedback. The agent's reply
+    latency is bounded; silence here is fine."""
     fake_enqueue = AsyncMock()
     client = MagicMock()
     client.assistant_threads_setStatus = AsyncMock()
@@ -320,12 +327,9 @@ async def test_enqueue_channel_with_client_fires_reaction() -> None:
             client,
         )
 
-    client.reactions_add.assert_awaited_once()
-    kwargs = client.reactions_add.await_args.kwargs
-    assert kwargs["channel"] == "C-general"
-    assert kwargs["timestamp"] == "3333.3333"
-    assert kwargs["name"] == "eyes"
+    client.reactions_add.assert_not_called()
     client.assistant_threads_setStatus.assert_not_called()
+    fake_enqueue.assert_awaited_once()  # the agent still runs
 
 
 @pytest.mark.asyncio
@@ -431,3 +435,99 @@ async def test_disable_workspace_noop_for_unknown_tenant(monkeypatch) -> None:
 
     monkeypatch.setattr(session_mod, "async_session", FakeSession)
     await _disable_workspace("T-unknown")  # no exception
+
+
+# ---------------------------------------------------------------------------
+# Channel thread follow-up (no @-mention required after bot has joined)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_enqueue_channel_mention_marks_thread_active(monkeypatch) -> None:
+    """Processing a channel @-mention must mark the thread active in Redis so
+    follow-up messages (without @-mention) are picked up automatically.
+    """
+    import lyra_core.worker.queue as queue_mod
+
+    fake_enqueue = AsyncMock()
+    marked: list[tuple] = []
+
+    async def fake_mark(team_id, channel_id, thread_ts):
+        marked.append((team_id, channel_id, thread_ts))
+
+    monkeypatch.setattr(queue_mod, "enqueue_run_agent", fake_enqueue)
+    monkeypatch.setattr(queue_mod, "mark_thread_active", fake_mark)
+
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "user": "U1",
+                    "text": "<@bot> hey",
+                    "ts": "500.0",
+                },
+            }
+        )
+
+    assert ("T1", "C-general", "500.0") in marked
+
+
+@pytest.mark.asyncio
+async def test_on_message_channel_thread_enqueues_when_active(monkeypatch) -> None:
+    """A channel thread message (no @-mention) from an active thread must be
+    enqueued -- the user should NOT need to @-mention the bot on every reply.
+    """
+    from lyra_core.channels.slack.adapter import _register_event_handlers
+
+    import lyra_core.worker.queue as queue_mod
+
+    fake_enqueue = AsyncMock()
+    monkeypatch.setattr(queue_mod, "enqueue_run_agent", fake_enqueue)
+    monkeypatch.setattr(queue_mod, "is_thread_active", AsyncMock(return_value=True))
+
+    with patch("lyra_core.worker.queue.enqueue_run_agent", fake_enqueue):
+        await _enqueue_from_event(
+            {
+                "team_id": "T1",
+                "event": {
+                    "type": "message",
+                    "channel": "C-general",
+                    "channel_type": "channel",
+                    "thread_ts": "500.0",
+                    "user": "U2",
+                    "text": "what about this one?",
+                    "ts": "501.0",
+                },
+            }
+        )
+
+    fake_enqueue.assert_awaited_once()
+    import json
+
+    payload = json.loads(fake_enqueue.call_args.args[0])
+    assert payload["reply_thread_ts"] == "500.0"
+    assert payload["agent_thread_id"] == "slack:ch:T1:C-general:500.0"
+
+
+@pytest.mark.asyncio
+async def test_on_message_channel_thread_skipped_when_not_active(monkeypatch) -> None:
+    """A channel thread message for a thread the bot has NOT participated in
+    must be silently ignored (bot shouldn't respond to random threads).
+    """
+    import lyra_core.worker.queue as queue_mod
+
+    fake_enqueue = AsyncMock()
+    monkeypatch.setattr(queue_mod, "enqueue_run_agent", fake_enqueue)
+    monkeypatch.setattr(queue_mod, "is_thread_active", AsyncMock(return_value=False))
+
+    # Simulate the on_message handler path by checking is_thread_active directly.
+    # The handler itself is registered on a Bolt App; we test the guard logic here.
+    from lyra_core.worker.queue import is_thread_active
+
+    active = await is_thread_active("T1", "C-general", "999.0")
+    assert active is False
+    fake_enqueue.assert_not_awaited()

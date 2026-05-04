@@ -185,11 +185,29 @@ def _register_event_handlers(app: AsyncApp) -> None:
     async def on_message(body: dict[str, Any], ack: Any, client: Any) -> None:
         await ack()
         event = body.get("event", {})
-        # Only respond in DMs or threads we're in; ignore bot messages.
+        # Ignore bot-posted messages and subtypes (edits, deletions, etc.)
         if event.get("bot_id") or event.get("subtype"):
             return
-        if event.get("channel_type") == "im":
+        channel_type = event.get("channel_type")
+        thread_ts = event.get("thread_ts")
+        if channel_type == "im":
+            # DMs: always respond.
             await _enqueue_from_event(body, client)
+        elif thread_ts:
+            # Channel thread message without @-mention: only respond if the
+            # bot has already participated in this thread (marked in Redis
+            # when the original @-mention was processed).
+            from lyra_core.worker.queue import is_thread_active
+
+            team_id = body.get("team_id") or body.get("api_app_id") or ""
+            channel_id = event.get("channel", "")
+            try:
+                active = await is_thread_active(team_id, channel_id, thread_ts)
+            except Exception:
+                log.debug("slack.thread_active_check.failed", exc_info=True)
+                active = False
+            if active:
+                await _enqueue_from_event(body, client)
 
     @app.command("/arlo")
     async def slash_command(ack: Any, command: dict[str, Any], client: Any) -> None:
@@ -320,10 +338,12 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
     """Translate a Slack event into InboundMessage + dispatch to Celery.
 
     Reply-threading rules (so the UX matches Slack conventions):
-      - DM, top-level message     -> reply as a new top-level message (no thread_ts).
+      - DM, top-level message     -> reply in a thread anchored under the user's message.
       - DM, reply inside thread   -> reply in that same thread.
       - Channel @-mention top-lvl -> reply threaded on the user's message.
       - Channel reply in a thread -> reply in that same thread.
+      - Channel thread follow-up  -> same as "reply in a thread" (no @mention needed
+                                     once the bot has entered the thread).
 
     Agent-memory rules (the `agent_thread_id` keying the LangGraph checkpointer):
       - DM   -> 'slack:dm:{team}:{channel}:{user}' -- the entire DM with this
@@ -367,10 +387,24 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
 
     if slack_thread_ts:
         reply_thread_ts: str | None = slack_thread_ts
-    elif is_dm:
-        reply_thread_ts = None
     else:
+        # For both DMs and channel @-mentions: anchor the reply as a thread
+        # under the triggering message. This groups each exchange visually
+        # and lets multiple users DM the bot without their replies colliding
+        # in an unthreaded stream. The agent_thread_id (below) keeps DM
+        # memory continuous across multiple top-level messages regardless.
         reply_thread_ts = slack_msg_ts
+
+    # Mark channel threads so follow-up messages (without @-mention) are
+    # picked up by the on_message handler. Best-effort: failure here must
+    # never prevent the agent from running.
+    if not is_dm and reply_thread_ts:
+        from lyra_core.worker.queue import mark_thread_active
+
+        try:
+            await mark_thread_active(team_id, channel_id, reply_thread_ts)
+        except Exception:
+            log.debug("slack.thread_mark.failed", exc_info=True)
 
     if is_dm:
         # One continuous LangGraph thread per (team, DM-channel, user). The
@@ -437,26 +471,54 @@ async def _enqueue_from_event(body: dict[str, Any], client: Any = None) -> None:
 
 
 async def _post_thinking_indicator(client: Any, msg: InboundMessage, is_dm: bool) -> None:
-    """Best-effort feedback. Never raises -- agent must run regardless."""
+    """Best-effort feedback. Never raises -- agent must run regardless.
+
+    DMs use Slack's native assistant typing status ("Thinking…") which is
+    ephemeral and auto-clears the moment the bot posts. We keep this on
+    because it's lossless UX -- no clutter, no lingering signal.
+
+    Channel mentions previously also auto-added a 👀 reaction here, but
+    that overloaded the meaning of reactions: every mention got the same
+    stamp regardless of what ARLO actually did. The auto-reaction is now
+    DISABLED so reactions become INTENTIONAL signals from the agent (via
+    the `slack.reactions.add` tool) -- 👀 on receipt of a long task,
+    ✅ on completion, etc. The system prompt teaches the LLM when to
+    use them. To re-enable the always-on 👀, uncomment the block below.
+    """
+    if not is_dm:
+        # Channel mentions: silence is fine; reply latency is bounded
+        # and reactions are reserved for the LLM to use deliberately.
+        #
+        # --- Legacy auto-:eyes: on channel mentions (disabled 2026-05) ---
+        # If you want every channel mention to get an instant 👀 stamp
+        # again (instead of letting the LLM decide), uncomment this block.
+        #
+        # try:
+        #     await client.reactions_add(
+        #         channel=msg.channel_id,
+        #         timestamp=msg.thread_id,
+        #         name="eyes",
+        #     )
+        # except SlackApiError as e:
+        #     # Common reasons: app missing scope, reaction already exists.
+        #     log.info(
+        #         "slack.indicator.skipped",
+        #         kind="reaction",
+        #         error=getattr(e.response, "data", {}).get("error", str(e)),
+        #     )
+        return
     try:
-        if is_dm:
-            await client.assistant_threads_setStatus(
-                channel_id=msg.channel_id,
-                thread_ts=msg.thread_id,
-                status="Thinking…",
-            )
-        else:
-            await client.reactions_add(
-                channel=msg.channel_id,
-                timestamp=msg.thread_id,
-                name="eyes",
-            )
+        await client.assistant_threads_setStatus(
+            channel_id=msg.channel_id,
+            thread_ts=msg.thread_id,
+            status="Thinking…",
+        )
     except SlackApiError as e:
         # Common reasons: app missing the assistant feature / scope, the
-        # thread isn't an assistant thread, the reaction already exists.
-        # All non-fatal -- the agent still runs and posts a real reply.
+        # thread isn't an assistant thread. All non-fatal -- the agent
+        # still runs and posts a real reply.
         log.info(
             "slack.indicator.skipped",
-            kind="status" if is_dm else "reaction",
+            kind="status",
             error=getattr(e.response, "data", {}).get("error", str(e)),
         )

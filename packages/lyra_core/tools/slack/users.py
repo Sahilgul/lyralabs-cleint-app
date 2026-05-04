@@ -137,5 +137,62 @@ def _to_user(u: dict[str, Any]) -> _SlackUser:
     )
 
 
+# -----------------------------------------------------------------------------
+
+
+class UsersLookupByEmailInput(BaseModel):
+    email: str = Field(
+        description=(
+            "Email address to look up. Must match the email on the user's "
+            "Slack profile exactly."
+        )
+    )
+
+
+class UsersLookupByEmailOutput(BaseModel):
+    user: _SlackUser | None = None
+    found: bool = False
+
+
+class UsersLookupByEmail(Tool[UsersLookupByEmailInput, UsersLookupByEmailOutput]):
+    name = "slack.users.lookup_by_email"
+    description = (
+        "Find a Slack user by email address — single API call, no pagination. "
+        "Prefer this over `slack.users.list` when you already have the email "
+        "(e.g. from a calendar invite, a CRM record, or the user's prompt). "
+        "Returns `found=False` cleanly if no user matches."
+    )
+    provider = "slack"
+    Input = UsersLookupByEmailInput
+    Output = UsersLookupByEmailOutput
+
+    async def run(
+        self, ctx: ToolContext, args: UsersLookupByEmailInput
+    ) -> UsersLookupByEmailOutput:
+        try:
+            token = await _bot_token_for(ctx.tenant_id)
+        except SlackTokenMissing as exc:
+            raise ToolError(str(exc)) from exc
+
+        client = AsyncWebClient(token=token)
+        try:
+            resp = await client.users_lookupByEmail(email=args.email)
+        except SlackApiError as exc:
+            err = (exc.response.data or {}).get("error", str(exc))
+            # Slack returns `users_not_found` for unknown emails — surface as
+            # a clean "not found" result rather than a tool error so the
+            # planner can branch on it.
+            if err == "users_not_found":
+                return UsersLookupByEmailOutput(found=False)
+            raise ToolError(f"slack.users.lookup_by_email failed: {err}") from exc
+
+        assert isinstance(resp.data, dict)
+        user_dict = resp.data.get("user") or {}
+        if not user_dict:
+            return UsersLookupByEmailOutput(found=False)
+        return UsersLookupByEmailOutput(user=_to_user(user_dict), found=True)
+
+
 default_registry.register(UsersInfo())
 default_registry.register(UsersList())
+default_registry.register(UsersLookupByEmail())
