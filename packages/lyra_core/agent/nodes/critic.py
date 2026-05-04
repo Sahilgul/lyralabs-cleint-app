@@ -74,7 +74,7 @@ async def critic_node(state: AgentState) -> dict[str, Any]:
     }
 
     resp = await chat(
-        tier=ModelTier.PRIMARY,
+        tier=ModelTier.CRITIC,
         messages=[
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": json.dumps(payload)},
