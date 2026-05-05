@@ -48,6 +48,127 @@ SUBMIT_PLAN_TOOL_NAME = "submit_plan_for_approval"
 # a few back-and-forths plus their tool-call results.
 MAX_HISTORY_MESSAGES = 20
 
+
+# Synthetic content for the `role: "tool"` message that closes the
+# `submit_plan_for_approval` tool_call loop in `state.messages`.
+#
+# Why this exists at all: OpenAI's tool-calling protocol requires every
+# assistant `tool_calls[].id` to be paired with a `role: "tool"` message
+# carrying a matching `tool_call_id`. Without that pairing, the next LLM
+# call returns 400 ("tool_calls without matching tool messages"). So the
+# graph injects a synthetic tool message immediately after a plan is
+# submitted, even though `submit_plan_for_approval` is a control-flow
+# signal -- not a real tool that produced output.
+#
+# Why the wording matters: an earlier version used the string
+# "Plan submitted for approval." On the *next* user turn (e.g. the user
+# couldn't see the card and asked "where is the card?") the LLM would
+# read that synthetic tool result and confidently conclude "the card is
+# above" -- because nothing in the message warned otherwise. That
+# produced the user-reported "stop / I hear you / Understood" loop on
+# Tehreem's thread (DLQ jobs 9652f4f4, 72bf7a78, c9c5d3b8).
+#
+# The replacement below is explicit: it is system bookkeeping, NOT proof
+# that anything was rendered to the user. It also tells the model how to
+# behave if a later user message indicates the card never surfaced.
+PLAN_HANDOFF_TOOL_MESSAGE = (
+    "[control-flow ack] Plan handed off to the approval gate. This message "
+    "exists only to close the tool_call loop -- it does NOT mean the user "
+    "has seen the approval card. The card is rendered asynchronously by a "
+    "separate channel and you cannot verify rendering from inside this "
+    "turn. The next assistant turn will see the resolution (approved, "
+    "rejected, or auto-cancelled). If a later user message indicates they "
+    "cannot see the card / want it resent / are confused about its "
+    "existence, do NOT claim the card is 'above' -- apologise briefly, "
+    "paste the plan steps inline as text, and wait for them to reply."
+)
+
+# When the plan is explicitly rejected by the user (Reject button click),
+# `rejected_reply_node` rewrites the synthetic tool message with this
+# content. Subsequent agent turns then read truthful state instead of the
+# stale "handed off to gate" ack. The wording is similarly defensive: it
+# tells the model the card is no longer active so a follow-up user message
+# isn't met with another "the card is above" hallucination.
+PLAN_REJECTED_TOOL_MESSAGE = (
+    "[control-flow ack] Plan was rejected by the user before any step "
+    "executed. No approval card is currently active. If the user asks "
+    "about the rejected plan, summarise it briefly and ask what to "
+    "change; do NOT propose the same plan again, and do NOT claim a card "
+    "is 'above' -- there is none."
+)
+
+# When `_run` auto-cancels a stale interrupt because the user typed a new
+# message instead of clicking Approve/Reject (Fix 1), the rejected_reply
+# branch rewrites the synthetic tool message with this content. The model
+# should treat the new user_request as the active task, not the cancelled
+# plan.
+PLAN_AUTOCANCELLED_TOOL_MESSAGE = (
+    "[control-flow ack] Plan was auto-cancelled because the user sent a "
+    "new message instead of approving/rejecting. The previous approval "
+    "card is no longer active. Treat the current user_request as the "
+    "active task. Do NOT reference the cancelled plan or claim its card "
+    "is 'above' -- there is none active."
+)
+
+
+def _rewrite_synthetic_plan_tool_message(
+    messages: list[dict[str, Any]],
+    plan_call_id: str,
+    new_content: str,
+) -> list[dict[str, Any]]:
+    """Return a copy of `messages` with the synthetic plan tool message
+    rewritten to `new_content`.
+
+    Walks `messages` looking for a single `role: "tool"` entry whose
+    `tool_call_id` matches `plan_call_id` AND whose `content` is one of the
+    known synthetic plan markers (handoff / rejected / auto-cancelled).
+    Only that entry is rewritten; other tool messages are left untouched
+    so we don't accidentally clobber real tool results from intermixed
+    read-tool calls.
+
+    Returns a fresh list (no in-place mutation) so callers can safely
+    return it as the new `messages` value in the LangGraph state update.
+    """
+    known_markers = {
+        PLAN_HANDOFF_TOOL_MESSAGE,
+        PLAN_REJECTED_TOOL_MESSAGE,
+        PLAN_AUTOCANCELLED_TOOL_MESSAGE,
+        # Legacy sentinel from before this fix landed; older threads in the
+        # checkpointer still carry it. Match it so a follow-up turn after
+        # a deploy gets the corrected wording instead of inheriting the
+        # stale lie.
+        "Plan submitted for approval.",
+    }
+    rewritten: list[dict[str, Any]] = []
+    for msg in messages:
+        if (
+            msg.get("role") == "tool"
+            and msg.get("tool_call_id") == plan_call_id
+            and msg.get("content") in known_markers
+        ):
+            rewritten.append({**msg, "content": new_content})
+        else:
+            rewritten.append(msg)
+    return rewritten
+
+
+def find_pending_plan_tool_call_id(messages: list[dict[str, Any]]) -> str | None:
+    """Locate the most recent `submit_plan_for_approval` tool_call_id in
+    `messages`. Returns None if there isn't one.
+
+    Used by `approval.rejected_reply_node` to rewrite the synthetic tool
+    message when a plan resolves to rejected or auto-cancelled.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            if fn.get("name") == SUBMIT_PLAN_TOOL_NAME:
+                return tc.get("id")
+    return None
+
+
 SYSTEM_TEMPLATE = """You are ARLO — a senior operations coworker for a marketing agency that runs on GoHighLevel. You live in Slack. The team has connected their working systems (CRM, calendars, ads, payments, docs, etc.) to you and relies on you to run real work in those systems.
 
 # Voice — friendly but professional, mid-warmth
@@ -116,6 +237,15 @@ WRITE TOOLS (must go through {submit_plan_tool}):
 Each step in the plan MUST include the full `args` dict — every parameter the tool needs (IDs, body text, field values). Empty `args: {{}}` is invalid; the step will fail at execution.
 
 Artifact tools (e.g. `artifact.pdf.from_markdown`, `artifact.chart.line`, `artifact.chart.bar`) generate downloadable files without mutating any external system — safe to call directly or include in a plan.
+
+### After you submit a plan — what you can and cannot claim
+When you call `{submit_plan_tool}`, the tool result you get back is a control-flow acknowledgement. It is NOT proof that the user has seen anything. The approval card is rendered by a separate channel; you cannot verify rendering from inside the same turn.
+
+So:
+- Do NOT tell the user "I posted the card" or "the card is above" or "scroll up to approve" — you cannot verify either statement.
+- After submitting, simply stop and wait. The next turn starts only after the user approves, rejects, or sends a new message.
+- If a later user message indicates they cannot see the card / want it resent / are confused about its existence: apologise briefly ("Sorry, looks like the card didn't surface — here's the plan inline:"), then paste the plan steps as plain text in your reply (one bullet per step, with the action and the key field values). Wait for them to reply "yes proceed" / "no, change X". Do NOT call `{submit_plan_tool}` again on your own — they will tell you when they're ready.
+- If the user sends a new request without approving the previous plan, the previous plan is auto-cancelled by the system. Treat the new message as the active task; do not re-propose the cancelled plan and do not reference its card as if it were still live.
 
 ### Tool namespaces — routing rules only
 Tool schemas (names, parameters, descriptions) are embedded in the function-calling list — consult them directly. These rules govern *when* to reach for each namespace; they don't repeat what the schemas already say.
@@ -559,6 +689,49 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
 
     tool_calls = serialized.get("tool_calls") or []
 
+    # "Speak before you work" — hoisted preamble post.
+    #
+    # When the model emits text content alongside one or more tool calls
+    # (read tool OR submit_plan_for_approval), that text is a pre-flight
+    # progress note: "On it — building the template now, ~10s." We post it
+    # to Slack BEFORE routing into a branch so the user sees the agent's
+    # intent immediately, regardless of whether downstream work is a tool
+    # loop or an approval gate.
+    #
+    # Why this lives ABOVE the plan/read-tool branches and not inside them:
+    # the plan branch (Case 1 below) returns early with `pending_plan` set
+    # and never reaches Case 2's preamble logic. So when the model wrote
+    # "On it — building the template now" alongside a submit_plan_for_approval
+    # call, the preamble was silently dropped and the user only saw the
+    # Block Kit approval card. If the card failed to render (Slack DM
+    # quirks, mobile UI scrolling, notification settings), the user saw
+    # NOTHING of the agent's intent for that turn — exactly the UX hole
+    # on Tehreem's thread that compounded with the "card is above"
+    # hallucination loop.
+    #
+    # Why the `tool_calls and preamble` gate: the direct-reply branch
+    # (Case 3 below) treats `assistant_msg.content` AS the final reply
+    # and posts it itself. Without the `tool_calls` gate we would
+    # double-post on direct-reply turns. Fix 2's Redis dedup would catch
+    # the duplicate, but it's cleaner to never issue it in the first place.
+    #
+    # Why we don't gate on plan-validation success: read-tool turns ALSO
+    # post the preamble before knowing whether the tool will succeed
+    # downstream. Symmetry with that pattern keeps behaviour predictable
+    # — preamble fires when the model *intends* to do work, not after we
+    # know the work succeeded.
+    preamble = (assistant_msg.content or "").strip()
+    if tool_calls and preamble:
+        async with phase("agent.post_preamble", text_len=len(preamble)):
+            await post_reply(
+                tenant_id,
+                OutboundReply(
+                    text=preamble,
+                    channel_id=state["channel_id"],
+                    thread_ts=state.get("reply_thread_ts"),
+                ),
+            )
+
     # Case 1: agent submitted a plan -> route to approval.
     plan_args, plan_call_id = _extract_submit_plan_call(tool_calls)
     if plan_args is not None:
@@ -600,35 +773,26 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
         # Close the tool_call loop immediately so history is always valid.
         # Without this, a reject followed by a new user message produces an
         # assistant message with tool_calls but no tool response → DeepSeek 400.
+        #
+        # The CONTENT of this tool message is deliberately a control-flow
+        # ack (see PLAN_HANDOFF_TOOL_MESSAGE) -- not a claim that the card
+        # is visible to the user. An earlier wording ("Plan submitted for
+        # approval.") read as proof-of-render to the LLM and produced the
+        # "card is above" hallucination loop on the Tehreem thread.
         closed_history = [
             *new_history,
             {
                 "role": "tool",
                 "tool_call_id": plan_call_id,
-                "content": "Plan submitted for approval.",
+                "content": PLAN_HANDOFF_TOOL_MESSAGE,
             },
         ]
         return {**base_update, "messages": closed_history, "pending_plan": plan.model_dump()}
 
     # Case 2: agent called a read tool -> route to tool_node loop.
+    # Preamble (if any) was already posted above the plan-extraction
+    # branch so the same hoisted block covers both routing paths.
     if tool_calls:
-        # If the model also produced text content alongside its tool calls,
-        # treat it as a pre-flight progress note ("On it, pulling those deals
-        # now — ~10s") and post it to Slack BEFORE the tools run. Without
-        # this, the content was silently swallowed and the user saw nothing
-        # until the final reply N seconds later. This is what makes "speak,
-        # don't react" actually work for long tasks.
-        preamble = (assistant_msg.content or "").strip()
-        if preamble:
-            async with phase("agent.post_preamble", text_len=len(preamble)):
-                await post_reply(
-                    tenant_id,
-                    OutboundReply(
-                        text=preamble,
-                        channel_id=state["channel_id"],
-                        thread_ts=state.get("reply_thread_ts"),
-                    ),
-                )
         return base_update
 
     # Case 3: direct reply.

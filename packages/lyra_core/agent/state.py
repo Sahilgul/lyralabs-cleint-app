@@ -77,6 +77,12 @@ class AgentState(TypedDict, total=False):
     pending_plan: dict[str, Any] | None
     step_results: list[dict[str, Any]]
     approval_decision: Literal["approved", "rejected", "pending"] | None
+    # Why the plan was rejected. "user_followup" = auto-cancelled because the
+    # user sent a new message instead of clicking Approve/Reject; in that case
+    # `rejected_reply_node` suppresses the canned reject post so the user only
+    # sees the response to their new request. Any other value (or None) is
+    # treated as an explicit user reject and gets the canned post.
+    approval_rejection_reason: str | None
     final_summary: str | None
     artifacts: list[dict[str, Any]]  # [{kind, filename, b64_content, description}]
     error: str | None

@@ -24,6 +24,18 @@ def _make_ctx() -> dict:
     return {"redis": redis, "job_try": 1}
 
 
+def _no_pending_interrupt_snapshot() -> MagicMock:
+    """Mock StateSnapshot for `aget_state` indicating no pending approval.
+
+    `_run` now calls `graph.aget_state(config)` before the main `ainvoke` to
+    detect a thread paused at `approval_wait`. For the default-happy-path
+    tests we want that pre-check to be a no-op (`next` empty → not paused).
+    """
+    snap = MagicMock()
+    snap.next = ()
+    return snap
+
+
 def _make_msg(text: str = "do x", *, is_dm: bool = False) -> str:
     return InboundMessage(
         surface=Surface.SLACK,
@@ -158,6 +170,7 @@ async def test_run_happy_path_invokes_graph(monkeypatch) -> None:
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
 
     fake_graph = MagicMock()
+    fake_graph.aget_state = AsyncMock(return_value=_no_pending_interrupt_snapshot())
     fake_graph.ainvoke = AsyncMock(
         return_value={"final_summary": "All done", "total_cost_usd": 0.012}
     )
@@ -193,6 +206,7 @@ async def test_run_dm_preserves_assistant_status_thread(monkeypatch) -> None:
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
 
     fake_graph = MagicMock()
+    fake_graph.aget_state = AsyncMock(return_value=_no_pending_interrupt_snapshot())
     fake_graph.ainvoke = AsyncMock(return_value={"final_summary": "ok", "total_cost_usd": 0})
     monkeypatch.setattr(task_mod, "build_agent_graph", lambda saver: fake_graph)
 
@@ -226,6 +240,7 @@ async def test_run_graph_crash_marks_job_failed(monkeypatch) -> None:
     monkeypatch.setattr(task_mod, "checkpointer", lambda: FakeSaver())
 
     fake_graph = MagicMock()
+    fake_graph.aget_state = AsyncMock(return_value=_no_pending_interrupt_snapshot())
     # ValueError is non-retryable — _should_retry returns False, so the handler
     # returns {"status": "failed"} immediately without raising Retry.
     fake_graph.ainvoke = AsyncMock(side_effect=ValueError("boom"))

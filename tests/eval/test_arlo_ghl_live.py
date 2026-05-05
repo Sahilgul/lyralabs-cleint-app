@@ -13,9 +13,10 @@ Unlike `test_arlo_eval.py` (which uses hardcoded mock schemas), this eval:
      model's final response is grounded in real contact/opportunity data.
 
   3. Write tools are NOT executed — when the model calls
-     `submit_plan_for_approval`, we capture the plan and return a stub
-     response ("Plan submitted for approval."). This prevents test runs
-     from mutating live CRM data.
+     `submit_plan_for_approval`, we capture the plan and return a control-
+     flow ack stub (mirroring production's PLAN_HANDOFF_TOOL_MESSAGE).
+     This prevents test runs from mutating live CRM data and keeps the
+     eval LLM's view of the world identical to production.
 
 Prerequisites (add to .env):
     GHL_EVAL_TOKEN=pit-xxxxxxxx...    # Private Integration Token
@@ -645,14 +646,20 @@ async def _eval_one(
                     args = {}
 
                 if tool_name == "submit_plan_for_approval":
-                    # Capture plan, don't execute — this is the approval gate simulation
+                    # Capture plan, don't execute — this is the approval gate simulation.
+                    # The `message` field intentionally mirrors production's
+                    # PLAN_HANDOFF_TOOL_MESSAGE shape (control-flow ack only,
+                    # NOT a claim that a card is rendered) so eval LLM
+                    # behaviour predicts production behaviour.
                     try:
                         plan_data = json.loads(tc["arguments"] or "{}")
                         result.plan_steps = plan_data.get("steps", [])
                     except json.JSONDecodeError:
                         pass
+                    from lyra_core.agent.nodes.agent import PLAN_HANDOFF_TOOL_MESSAGE
+
                     tool_result_str = json.dumps(
-                        {"status": "submitted", "message": "Plan submitted for approval."}
+                        {"status": "submitted", "message": PLAN_HANDOFF_TOOL_MESSAGE}
                     )
                     # After submitting a plan, the loop is done — model replies with summary
                 else:

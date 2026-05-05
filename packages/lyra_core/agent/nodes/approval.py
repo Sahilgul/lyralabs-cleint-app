@@ -22,6 +22,12 @@ from ...channels.slack.poster import post_reply
 from ...tools.base import RiskProfile, TrustTier
 from ..state import AgentState, Plan
 from ..trust import classify_step, overall_plan_tier
+from .agent import (
+    PLAN_AUTOCANCELLED_TOOL_MESSAGE,
+    PLAN_REJECTED_TOOL_MESSAGE,
+    _rewrite_synthetic_plan_tool_message,
+    find_pending_plan_tool_call_id,
+)
 
 
 async def _run_rehearsal(
@@ -219,15 +225,23 @@ async def approval_wait_node(state: AgentState) -> dict[str, Any]:
     This is the ONLY node that calls interrupt(). Because approval_post_node
     already completed and was checkpointed, LangGraph resumes HERE on
     button click — the card is never re-posted.
+
+    The resume payload may also carry a `reason` field (e.g. "user_followup"
+    when the worker auto-cancels a stale interrupt because a new user message
+    arrived). The reason flows through to rejected_reply_node so it can vary
+    its behavior (e.g. suppress the canned reject post on auto-cancel).
     """
     decision = interrupt({"prompt": "approve_or_reject", "job_id": state["job_id"]})
+    rejection_reason: str | None = None
     if isinstance(decision, dict):
+        rejection_reason = decision.get("reason")
         decision = decision.get("decision", "rejected")
     if decision not in {"approved", "rejected"}:
         decision = "rejected"
 
     return {
         "approval_decision": decision,
+        "approval_rejection_reason": rejection_reason,
         "needs_approval_wait": False,
     }
 
@@ -242,6 +256,49 @@ def route_after_approval(state: AgentState) -> Literal["executor", "rejected_rep
 
 
 async def rejected_reply_node(state: AgentState) -> dict[str, Any]:
+    history = list(state.get("messages") or [])
+    reason = state.get("approval_rejection_reason")
+
+    # Locate the synthetic tool message left by `agent_node` when the plan
+    # was submitted (PLAN_HANDOFF_TOOL_MESSAGE). On resolution we rewrite
+    # that message in place with a state-accurate marker -- otherwise the
+    # next agent_node turn reads "Plan handed off..." and the LLM has to
+    # reconcile two contradictory signals (handoff vs. rejection) which
+    # historically produced the "card is above" hallucination loop. The
+    # rewrite is null-safe: if no submit_plan_for_approval tool_call is
+    # found in history (defensive), `find_pending_plan_tool_call_id`
+    # returns None and `_rewrite_synthetic_plan_tool_message` is a no-op.
+    plan_call_id = find_pending_plan_tool_call_id(history)
+
+    # Auto-cancellation path: the rejection wasn't an explicit user click —
+    # it was the worker resolving a stale interrupt because the user sent
+    # a new message instead of clicking Approve/Reject. The new run_agent
+    # invocation will produce the real reply for that new request, so
+    # posting a canned "Got it - rejected" here would just spam the thread.
+    # We still record the implicit cancellation in `messages` so the next
+    # agent_node turn knows the previous plan is no longer pending and
+    # doesn't re-propose it.
+    if reason == "user_followup":
+        if plan_call_id is not None:
+            history = _rewrite_synthetic_plan_tool_message(
+                history, plan_call_id, PLAN_AUTOCANCELLED_TOOL_MESSAGE
+            )
+        new_messages = [
+            *history,
+            {
+                "role": "assistant",
+                "content": (
+                    "[previous plan auto-cancelled — user sent a follow-up "
+                    "message instead of approving/rejecting; treat the new "
+                    "user_request as the active task]"
+                ),
+            },
+        ]
+        return {
+            "final_summary": "auto_cancelled_for_followup",
+            "messages": new_messages,
+        }
+
     text = "Got it - rejected. I won't do anything. Tell me what to change."
     reply = OutboundReply(
         text=text,
@@ -253,7 +310,10 @@ async def rejected_reply_node(state: AgentState) -> dict[str, Any]:
     # Record the rejection in message history so a follow-up turn knows the
     # plan was rejected (not still pending) and the model can reason about
     # what to change instead of reposting the same approval card.
-    history = list(state.get("messages") or [])
+    if plan_call_id is not None:
+        history = _rewrite_synthetic_plan_tool_message(
+            history, plan_call_id, PLAN_REJECTED_TOOL_MESSAGE
+        )
     new_messages = [
         *history,
         {"role": "assistant", "content": f"[plan rejected by user]\n\n{text}"},

@@ -52,7 +52,7 @@ test:
 	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/unit -q
 
 test-regression:
-	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/regression/regression_test1.py tests/regression/regression_test2.py tests/regression/regression_test3.py tests/regression/regression_test4.py tests/regression/regression_test5.py tests/regression/regression_test6.py tests/regression/regression_test7.py -v
+	APP_ENV=test PYTHONPATH=packages:. .venv/bin/pytest tests/regression/regression_test1.py tests/regression/regression_test2.py tests/regression/regression_test3.py tests/regression/regression_test4.py tests/regression/regression_test5.py tests/regression/regression_test6.py tests/regression/regression_test7.py tests/regression/regression_test8.py tests/regression/regression_test9.py tests/regression/regression_test10.py tests/regression/regression_test11.py -v
 
 # Live inference benchmark — hits real provider APIs, requires keys in .env.
 # Prints latency, tokens/s, cost, and a response snippet for every model.

@@ -103,6 +103,64 @@ async def resume_agent(ctx: dict, *, job_id: str, decision: str, user_id: str) -
     return await _resume(ctx, job_id=job_id, decision=decision, user_id=user_id)
 
 
+async def _cancel_pending_approval_if_any(graph, config: dict, thread_id: str) -> None:
+    """Resolve any pre-existing approval interrupt on this thread before re-invoking.
+
+    A new run_agent task means a fresh user message arrived in this thread.
+    If the previous turn left the graph paused at `approval_wait` (the only
+    node that calls `interrupt()`), calling `graph.ainvoke(initial_state, ...)`
+    on the paused thread does NOT safely deliver the new request to
+    `agent_node` — the interrupt stays pending and the user's follow-up
+    message is effectively lost.
+
+    The fix: detect the pending interrupt via `aget_state(config)`, atomically
+    flip the previous awaiting_approval Job to 'rejected' (so a stale Approve
+    button click can't later try to resume a plan we've now superseded), then
+    feed a typed `Command(resume=...)` to clear the interrupt cleanly. The
+    `reason="user_followup"` flows through state into `rejected_reply_node`,
+    which suppresses the canned 'Got it - rejected' Slack post — the new
+    invocation will produce the real reply for the new request.
+
+    Idempotent on retry: if the cancel-resume already ran in a prior attempt,
+    the graph's `next` no longer contains `approval_wait` and this is a no-op.
+    """
+    from langgraph.types import Command
+
+    async with phase("worker.preflight_state_check"):
+        try:
+            pre_state = await graph.aget_state(config)
+        except Exception as exc:
+            # Defensive: if checkpoint inspection itself fails (transient DB
+            # blip etc.), skip the pre-check rather than crashing run_agent.
+            # The downstream ainvoke will surface any real error.
+            log.warning("run_agent.preflight_state_check.failed", error=str(exc)[:200])
+            return
+
+    next_nodes: tuple[str, ...] = tuple(getattr(pre_state, "next", ()) or ())
+    if "approval_wait" not in next_nodes:
+        return
+
+    log.info(
+        "run_agent.cancel_pending_approval_for_followup",
+        thread_id=thread_id,
+        next_nodes=list(next_nodes),
+    )
+
+    async with async_session() as s:
+        await s.execute(
+            update(Job)
+            .where(Job.thread_id == thread_id, Job.status == "awaiting_approval")
+            .values(status="rejected", error="superseded_by_user_followup")
+        )
+        await s.commit()
+
+    async with phase("worker.cancel_pending_approval"):
+        await graph.ainvoke(
+            Command(resume={"decision": "rejected", "reason": "user_followup"}),
+            config=config,
+        )
+
+
 async def _run(ctx: dict, message_json: str) -> dict:
     msg = InboundMessage.model_validate_json(message_json)
     task_started = time.perf_counter()
@@ -217,6 +275,7 @@ async def _run(ctx: dict, message_json: str) -> dict:
 
             try:
                 graph = build_agent_graph(saver)
+                await _cancel_pending_approval_if_any(graph, config, thread_id)
                 async with phase("worker.graph_invoke"):
                     final = await graph.ainvoke(initial_state, config=config)
             except Exception as exc:
