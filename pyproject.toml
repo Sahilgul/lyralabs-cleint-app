@@ -88,6 +88,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live: hits real provider APIs — requires API keys in .env (deselect with -m 'not live')",
+    "real_dedup: opts a test out of test_slack_poster.py's autouse _allow_dedup fixture so the REAL _claim_dedup_slot runs (used to verify SET NX EX semantics + fail-open behaviour)",
 ]
 
 [tool.mypy]
